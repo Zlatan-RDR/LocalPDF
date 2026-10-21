@@ -36,6 +36,27 @@ object Diagnostics {
         }
     }
 
+    fun securityInfo(ctx: Context): String {
+        val domain = try {
+            File("/proc/self/attr/current").readText().replace("\u0000", "").trim()
+        } catch (e: Throwable) {
+            "unreadable: ${e.message}"
+        }
+        val status = try {
+            File("/proc/self/status").readLines()
+                .filter { it.startsWith("Seccomp:") || it.startsWith("NoNewPrivs:") }
+                .joinToString(", ") { it.replace("\t", " ") }
+        } catch (e: Throwable) {
+            "unreadable: ${e.message}"
+        }
+        return buildString {
+            appendLine("Package: ${ctx.packageName}")
+            appendLine("Target : ${ctx.applicationInfo.targetSdkVersion}")
+            appendLine("SELinux: $domain")
+            appendLine("Status : $status")
+        }
+    }
+
     fun nativeLibsInfo(ctx: Context): String {
         val dir = File(ctx.applicationInfo.nativeLibraryDir)
         val files = dir.listFiles()?.sortedBy { it.name } ?: emptyList()
