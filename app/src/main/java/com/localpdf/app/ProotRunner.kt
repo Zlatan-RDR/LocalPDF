@@ -126,4 +126,31 @@ java -version 2>&1
         return "attempt 1 (default): exit=${first.exit}\n${first.output}\n" +
             "attempt 2 (PROOT_NO_SECCOMP=1): exit=${second.exit}\n${second.output}"
     }
+
+    fun runProbeDirect(ctx: Context): String {
+        val r = execute(ctx, listOf("${nativeDir(ctx)}/libmprobe.so"), false, 30)
+        return "exit=${r.exit}\n${r.output}"
+    }
+
+    fun runProbeInProot(ctx: Context): String {
+        val root = File(ctx.filesDir, "emptyroot")
+        for (d in listOf("native", "proc", "dev", "sys", "tmp")) {
+            File(root, d).mkdirs()
+        }
+        val nd = nativeDir(ctx)
+        val cmd = listOf(
+            "$nd/libproot.so",
+            "-0",
+            "--kill-on-exit",
+            "-r", root.absolutePath,
+            "-b", "$nd:/native",
+            "-b", "/proc",
+            "-b", "/dev",
+            "-b", "/sys",
+            "-w", "/",
+            "/native/libmprobe.so"
+        )
+        val r = execute(ctx, cmd, false, 30)
+        return "exit=${r.exit}\n${r.output}"
+    }
 }
