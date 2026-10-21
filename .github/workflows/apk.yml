@@ -17,10 +17,25 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Restore or create stable debug keystore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.android
+          if gh release download apk-latest -p debug.keystore -D ~/.android --clobber 2>/dev/null; then
+            echo "Restored the stored debug keystore"
+          else
+            echo "Creating a new debug keystore"
+            keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            gh release view apk-latest >/dev/null 2>&1 || gh release create apk-latest --prerelease --title "Latest APK" --notes "Latest debug build"
+            gh release upload apk-latest ~/.android/debug.keystore --clobber
+          fi
 
       - name: Fetch proot binaries (Termux packages)
         run: bash scripts/fetch-proot.sh
@@ -41,15 +56,7 @@ jobs:
             echo "## APK report"
             echo ""
             echo "- APK size: $(du -h "$APK" | cut -f1)"
-            echo "- Native libraries inside the APK:"
-            unzip -l "$APK" | grep -E 'lib/arm64-v8a' | sed 's/^/  - /' || true
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: LocalPDF-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
 
       - name: Publish APK to release apk-latest
         env:
