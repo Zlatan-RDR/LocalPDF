@@ -40,27 +40,36 @@ jobs:
       - name: Fetch proot binaries (Termux packages)
         run: bash scripts/fetch-proot.sh
 
+      - name: Build memory probe (static arm64)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          aarch64-linux-gnu-gcc -O2 -static -o app/src/main/jniLibs/arm64-v8a/libmprobe.so scripts/mprobe.c
+          ls -l app/src/main/jniLibs/arm64-v8a
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Build debug APKs
+        run: gradle :app:assembleModernDebug :app:assembleLegacyDebug --no-daemon --stacktrace
 
       - name: APK report
         run: |
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          ls -l "$APK"
+          ls -l app/build/outputs/apk/modern/debug/ app/build/outputs/apk/legacy/debug/
           {
             echo "## APK report"
             echo ""
-            echo "- APK size: $(du -h "$APK" | cut -f1)"
+            echo "- modern: $(du -h app/build/outputs/apk/modern/debug/app-modern-debug.apk | cut -f1)"
+            echo "- legacy: $(du -h app/build/outputs/apk/legacy/debug/app-legacy-debug.apk | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish APK to release apk-latest
+      - name: Publish APKs to release apk-latest
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view apk-latest >/dev/null 2>&1 || gh release create apk-latest --prerelease --title "Latest APK" --notes "Latest debug build"
-          gh release upload apk-latest app/build/outputs/apk/debug/app-debug.apk --clobber
+          gh release delete-asset apk-latest app-debug.apk -y 2>/dev/null || true
+          gh release upload apk-latest app/build/outputs/apk/modern/debug/app-modern-debug.apk app/build/outputs/apk/legacy/debug/app-legacy-debug.apk --clobber
