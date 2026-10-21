@@ -1,0 +1,77 @@
+name: Build runtime packs
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag that will hold the packs"
+        required: true
+        default: "packs-v1"
+  push:
+    branches: [ main ]
+    paths:
+      - "rootfs/Dockerfile"
+
+permissions:
+  contents: write
+
+jobs:
+  packs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download Stirling-PDF server jar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          TAG="$(gh api repos/Stirling-Tools/Stirling-PDF/releases/latest --jq .tag_name)"
+          echo "STIRLING_TAG=$TAG" >> "$GITHUB_ENV"
+          URL="https://github.com/Stirling-Tools/Stirling-PDF/releases/download/$TAG/Stirling-PDF-server.jar"
+          if ! curl -fL --retry 3 -o out/stirling-server.jar "$URL"; then
+            echo "Download failed. Assets available in release $TAG:"
+            gh release view "$TAG" -R Stirling-Tools/Stirling-PDF --json assets --jq '.assets[].name'
+            exit 1
+          fi
+          unzip -tq out/stirling-server.jar
+          ls -l out
+
+      - name: Build core and office rootfs
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/arm64 --target core -f rootfs/Dockerfile --output type=tar,dest=out/core.tar rootfs
+          docker buildx build --platform linux/arm64 --target office -f rootfs/Dockerfile --output type=tar,dest=out/office-full.tar rootfs
+          python3 scripts/make_delta.py out/core.tar out/office-full.tar out/office.tar
+          rm -f out/office-full.tar
+          ls -l out
+
+      - name: Compress packs (xz)
+        run: |
+          set -euo pipefail
+          xz -T0 -9 -k out/core.tar
+          xz -T0 -9 -k out/office.tar
+          ls -l out
+
+      - name: Size report and manifest
+        run: python3 scripts/pack_report.py out "$STIRLING_TAG" core office
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || 'packs-v1' }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "Runtime packs $RELEASE_TAG" --notes "Runtime packs for LocalPDF"
+          gh release upload "$RELEASE_TAG" out/core.tar.xz out/office.tar.xz out/stirling-server.jar out/manifest.json --clobber
