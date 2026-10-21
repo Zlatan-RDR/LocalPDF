@@ -55,7 +55,9 @@ fun MainScreen() {
     val ctx = LocalContext.current
     val view = LocalView.current
     val base = remember {
-        Diagnostics.deviceInfo(ctx) + "\nNative libs:\n" + Diagnostics.nativeLibsInfo(ctx)
+        Diagnostics.deviceInfo(ctx) + "\n" +
+            Diagnostics.securityInfo(ctx) + "\nNative libs:\n" +
+            Diagnostics.nativeLibsInfo(ctx)
     }
     var report by remember { mutableStateOf(base + "\n" + Diagnostics.rootfsInfo(ctx)) }
     var busy by remember { mutableStateOf(false) }
@@ -98,6 +100,21 @@ fun MainScreen() {
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !busy,
                 onClick = {
+                    runTask("اختبار الذاكرة التنفيذية (mprobe)") {
+                        "== direct (app process) ==\n" + ProotRunner.runProbeDirect(ctx) +
+                            "\n== inside proot ==\n" + ProotRunner.runProbeInProot(ctx)
+                    }
+                }
+            ) {
+                Text("اختبار الذاكرة التنفيذية (mprobe)")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy,
+                onClick = {
                     runTask("تثبيت النظام الأساسي") {
                         val log = StringBuilder()
                         Installer.installCore(
@@ -118,7 +135,7 @@ fun MainScreen() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
+            OutlinedButton(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !busy && installed,
                 onClick = {
