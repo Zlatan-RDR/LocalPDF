@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,6 +36,22 @@ static void run_stub(const char *name, void *addr) {
     fflush(stdout);
     fn();
     printf("%-36s OK\n", name);
+    fflush(stdout);
+}
+
+static void print_maps_for(const char *label, void *addr) {
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (!f) return;
+    char line[512];
+    uintptr_t a = (uintptr_t)addr;
+    while (fgets(line, sizeof(line), f)) {
+        unsigned long s = 0, e = 0;
+        if (sscanf(line, "%lx-%lx", &s, &e) == 2 && a >= s && a < e) {
+            line[strcspn(line, "\n")] = '\0';
+            printf("   %s: %s\n", label, line);
+        }
+    }
+    fclose(f);
     fflush(stdout);
 }
 
@@ -130,6 +147,50 @@ static void test_memfd_double_map(void) {
     close(fd);
 }
 
+static void *thread_main(void *arg) {
+    (void)arg;
+    int local = 0;
+    print_maps_for("thread stack area", &local);
+
+    void *p = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        report("8 thread: mmap RW", 0, errno);
+        return NULL;
+    }
+    print_maps_for("plain page area", p);
+    int r = mprotect(p, page_size, PROT_READ | PROT_WRITE | PROT_EXEC);
+    int e = errno;
+    report("8 thread: plain page RW -> RWX", r == 0, e);
+
+    char *base = mmap(NULL, 3 * page_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED) {
+        report("9 thread: mmap guards", 0, errno);
+        return NULL;
+    }
+    if (mprotect(base + page_size, page_size, PROT_READ | PROT_WRITE) != 0) {
+        report("9 thread: guard setup", 0, errno);
+        return NULL;
+    }
+    print_maps_for("isolated page area", base + page_size);
+    r = mprotect(base + page_size, page_size, PROT_READ | PROT_WRITE | PROT_EXEC);
+    e = errno;
+    report("9 thread: isolated page RW -> RWX", r == 0, e);
+    return NULL;
+}
+
+static void test_in_thread(void) {
+    pthread_t t;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 1024 * 1024);
+    int rc = pthread_create(&t, &attr, thread_main, NULL);
+    if (rc != 0) {
+        report("8 pthread_create", 0, rc);
+        return;
+    }
+    pthread_join(t, NULL);
+}
+
 static void print_selinux(void) {
     FILE *f = fopen("/proc/self/attr/current", "r");
     if (!f) {
@@ -181,6 +242,7 @@ int main(void) {
     test_rw_to_rx();
     test_rw_to_x_only();
     test_memfd_double_map();
+    test_in_thread();
     printf("done\n");
     return 0;
 }
