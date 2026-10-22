@@ -26,20 +26,27 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Restore or create stable debug keystore
+      - name: Restore or create the stable signing keystore
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.android
-          if gh release download apk-latest -p debug.keystore -D ~/.android --clobber 2>/dev/null; then
-            echo "Restored the stored debug keystore"
-          else
-            echo "Creating a new debug keystore"
-            keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-            gh release view apk-latest >/dev/null 2>&1 || gh release create apk-latest --prerelease --title "Latest APK" --notes "Latest debug build"
-            gh release upload apk-latest ~/.android/debug.keystore --clobber
-          fi
+          mkdir -p "$HOME/.android"
+          NAMES="$(gh release view apk-latest --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          case "$NAMES" in
+            *debug.keystore*)
+              gh release download apk-latest -p debug.keystore -D "$HOME/.android" --clobber
+              echo "Restored the stored keystore"
+              ;;
+            *)
+              echo "No stored keystore found, creating one"
+              keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+              gh release view apk-latest >/dev/null 2>&1 || gh release create apk-latest --prerelease --title "Latest APK" --notes "Latest debug build"
+              gh release upload apk-latest "$HOME/.android/debug.keystore" --clobber
+              ;;
+          esac
+          test -s "$HOME/.android/debug.keystore"
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android 2>/dev/null | grep -E "Alias name|SHA256" || true
 
       - name: Fetch proot binaries (Termux packages)
         run: bash scripts/fetch-proot.sh
@@ -72,25 +79,29 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Build debug APKs
-        run: gradle :app:assembleModernDebug :app:assembleLegacyDebug --no-daemon --stacktrace
+      - name: Build debug APK
+        run: |
+          export LOCALPDF_KEYSTORE="$HOME/.android/debug.keystore"
+          gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: APK report
         run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
           APKSIGNER="$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/ | sort -V | tail -n 1)apksigner"
           {
             echo "## APK report"
             echo ""
-            for f in app/build/outputs/apk/modern/debug/app-modern-debug.apk app/build/outputs/apk/legacy/debug/app-legacy-debug.apk; do
-              echo "- $(basename "$f"): $(du -h "$f" | cut -f1)"
-              "$APKSIGNER" verify --print-certs "$f" 2>/dev/null | grep -i "SHA-256" | sed 's/^/  - /' || true
-            done
+            echo "- app-debug.apk: $(du -h "$APK" | cut -f1)"
+            "$APKSIGNER" verify --print-certs "$APK" 2>/dev/null | grep -i "SHA-256" | sed 's/^/- Signer /' || true
+            echo ""
+            echo "Compare the first 32 characters with the Signer line shown inside the app."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish APKs to release apk-latest
+      - name: Publish APK to release apk-latest
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view apk-latest >/dev/null 2>&1 || gh release create apk-latest --prerelease --title "Latest APK" --notes "Latest debug build"
-          gh release delete-asset apk-latest app-debug.apk -y 2>/dev/null || true
-          gh release upload apk-latest app/build/outputs/apk/modern/debug/app-modern-debug.apk app/build/outputs/apk/legacy/debug/app-legacy-debug.apk --clobber
+          gh release delete-asset apk-latest app-modern-debug.apk -y 2>/dev/null || true
+          gh release delete-asset apk-latest app-legacy-debug.apk -y 2>/dev/null || true
+          gh release upload apk-latest app/build/outputs/apk/debug/app-debug.apk --clobber
