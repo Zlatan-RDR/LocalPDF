@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: apk-build
+  cancel-in-progress: false
+
 jobs:
   apk:
     runs-on: ubuntu-24.04
@@ -58,12 +62,17 @@ jobs:
 
       - name: APK report
         run: |
-          ls -l app/build/outputs/apk/modern/debug/ app/build/outputs/apk/legacy/debug/
+          APKSIGNER="$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/ | sort -V | tail -n 1)apksigner"
           {
             echo "## APK report"
             echo ""
-            echo "- modern: $(du -h app/build/outputs/apk/modern/debug/app-modern-debug.apk | cut -f1)"
-            echo "- legacy: $(du -h app/build/outputs/apk/legacy/debug/app-legacy-debug.apk | cut -f1)"
+            echo "Keystore fingerprint:"
+            keytool -list -v -keystore ~/.android/debug.keystore -storepass android 2>/dev/null | grep "SHA256:" | sed 's/^/  - /' || true
+            echo ""
+            for f in app/build/outputs/apk/modern/debug/app-modern-debug.apk app/build/outputs/apk/legacy/debug/app-legacy-debug.apk; do
+              echo "- $(basename "$f"): $(du -h "$f" | cut -f1)"
+              "$APKSIGNER" verify --print-certs "$f" 2>/dev/null | grep -i "SHA-256" | sed 's/^/  - /' || true
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish APKs to release apk-latest
