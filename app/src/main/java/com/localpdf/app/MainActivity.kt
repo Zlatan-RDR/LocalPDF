@@ -113,6 +113,18 @@ fun MainScreen() {
 
             Button(
                 modifier = Modifier.fillMaxWidth(),
+                enabled = !busy && installed,
+                onClick = {
+                    runTask("تشخيص Java (errno + musl)") { ProotRunner.javaDiagnostics(ctx) }
+                }
+            ) {
+                Text("تشخيص Java (errno + musl)")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
                 enabled = !busy,
                 onClick = {
                     runTask("اختبار الذاكرة التنفيذية (mprobe)") {
