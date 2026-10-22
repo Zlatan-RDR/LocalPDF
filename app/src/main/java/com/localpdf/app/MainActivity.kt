@@ -50,6 +50,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun phaseName(label: String): String = when (label) {
+    "core" -> "تنزيل النظام"
+    "jar" -> "تنزيل Stirling"
+    "extract" -> "فك الضغط"
+    else -> label
+}
+
 @Composable
 fun MainScreen() {
     val ctx = LocalContext.current
@@ -64,6 +71,7 @@ fun MainScreen() {
     var status by remember { mutableStateOf("") }
     var fraction by remember { mutableStateOf(-1f) }
     var installed by remember { mutableStateOf(Installer.isCoreInstalled(ctx)) }
+    var saved by remember { mutableStateOf(Installer.savedDownloadBytes(ctx)) }
 
     SideEffect { view.keepScreenOn = busy }
 
@@ -78,8 +86,15 @@ fun MainScreen() {
             report = report + "\n\n--- " + title + " ---\n" + result
             status = ""
             fraction = -1f
+            saved = Installer.savedDownloadBytes(ctx)
             busy = false
         }.start()
+    }
+
+    val installLabel = when {
+        installed -> "إعادة تثبيت النظام الأساسي"
+        saved > 0 -> "متابعة التنزيل (${saved / MB} ميغابايت محفوظة)"
+        else -> "تثبيت النظام الأساسي (نحو 260 ميغابايت)"
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -117,20 +132,37 @@ fun MainScreen() {
                 onClick = {
                     runTask("تثبيت النظام الأساسي") {
                         val log = StringBuilder()
-                        Installer.installCore(
-                            ctx,
-                            onProgress = { label, done, total ->
-                                status = "$label: ${done / MB} / ${total / MB} MB"
-                                fraction = if (total > 0) done.toFloat() / total else -1f
-                            },
-                            log = { line -> log.append(line).append('\n') }
-                        )
-                        installed = Installer.isCoreInstalled(ctx)
-                        log.append("OK").toString()
+                        try {
+                            Installer.installCore(
+                                ctx,
+                                onProgress = { label, done, total ->
+                                    status = "${phaseName(label)}: ${done / MB} / ${total / MB} MB"
+                                    fraction = if (total > 0) done.toFloat() / total else -1f
+                                },
+                                log = { line -> synchronized(log) { log.append(line).append('\n') } }
+                            )
+                            installed = Installer.isCoreInstalled(ctx)
+                            log.append("OK")
+                        } catch (e: PausedException) {
+                            log.append("تم الإيقاف المؤقت. التقدم محفوظ.")
+                        } catch (e: Throwable) {
+                            log.append("ERROR: ${e.javaClass.simpleName}: ${e.message}")
+                        }
+                        log.toString()
                     }
                 }
             ) {
-                Text(if (installed) "إعادة تثبيت النظام الأساسي" else "تثبيت النظام الأساسي (نحو 260 ميغابايت)")
+                Text(installLabel)
+            }
+
+            if (busy) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { Installer.requestPause() }
+                ) {
+                    Text("إيقاف مؤقت (يحفظ التقدم)")
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
