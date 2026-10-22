@@ -26,6 +26,20 @@ echo "== java =="
 java -version 2>&1
 """
 
+    private const val JAVA_DIAG_SCRIPT = """
+echo "== shim: java -version =="
+LD_PRELOAD=/native/libmpshim.so java -version 2>&1
+echo "== musl probe inside the rootfs =="
+/native/libmprobe_musl.so 2>&1
+echo "== limits =="
+ulimit -a 2>&1
+echo "== jvm files =="
+ls -l /usr/lib/jvm/ 2>&1
+ls -l /usr/lib/jvm/default-jvm/lib/server 2>&1 | head -n 8
+echo "== meminfo =="
+head -n 3 /proc/meminfo 2>&1
+"""
+
     private fun nativeDir(ctx: Context): String = ctx.applicationInfo.nativeLibraryDir
 
     private fun prepareLibLinks(ctx: Context): File {
@@ -94,26 +108,35 @@ java -version 2>&1
         ctx: Context,
         script: String,
         noSeccomp: Boolean = false,
-        timeoutSec: Long = 90
+        timeoutSec: Long = 90,
+        bindNative: Boolean = false
     ): ProcResult {
         val rootfs = Installer.rootfsDir(ctx)
-        val cmd = listOf(
+        val cmd = mutableListOf(
             "${nativeDir(ctx)}/libproot.so",
             "-0",
             "--kill-on-exit",
             "-r", rootfs.absolutePath,
             "-b", "/dev",
             "-b", "/proc",
-            "-b", "/sys",
-            "-w", "/",
-            "/usr/bin/env", "-i",
-            "HOME=/root",
-            "PATH=$GUEST_PATH",
-            "LANG=C.UTF-8",
-            "TERM=xterm",
-            "TMPDIR=/tmp",
-            "JAVA_HOME=/usr/lib/jvm/default-jvm",
-            "/bin/sh", "-c", script
+            "-b", "/sys"
+        )
+        if (bindNative) {
+            cmd.add("-b")
+            cmd.add("${nativeDir(ctx)}:/native")
+        }
+        cmd.addAll(
+            listOf(
+                "-w", "/",
+                "/usr/bin/env", "-i",
+                "HOME=/root",
+                "PATH=$GUEST_PATH",
+                "LANG=C.UTF-8",
+                "TERM=xterm",
+                "TMPDIR=/tmp",
+                "JAVA_HOME=/usr/lib/jvm/default-jvm",
+                "/bin/sh", "-c", script
+            )
         )
         return execute(ctx, cmd, noSeccomp, timeoutSec)
     }
@@ -125,6 +148,12 @@ java -version 2>&1
         val second = runInGuest(ctx, TEST_SCRIPT, noSeccomp = true)
         return "attempt 1 (default): exit=${first.exit}\n${first.output}\n" +
             "attempt 2 (PROOT_NO_SECCOMP=1): exit=${second.exit}\n${second.output}"
+    }
+
+    fun javaDiagnostics(ctx: Context): String {
+        if (!Installer.isCoreInstalled(ctx)) return "Core is not installed yet"
+        val r = runInGuest(ctx, JAVA_DIAG_SCRIPT, timeoutSec = 120, bindNative = true)
+        return "exit=${r.exit}\n${r.output}"
     }
 
     fun runProbeDirect(ctx: Context): String {
