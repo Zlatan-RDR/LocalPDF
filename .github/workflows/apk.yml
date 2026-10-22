@@ -15,7 +15,7 @@ concurrency:
 jobs:
   apk:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,12 +44,27 @@ jobs:
       - name: Fetch proot binaries (Termux packages)
         run: bash scripts/fetch-proot.sh
 
-      - name: Build memory probe (static arm64)
+      - name: Build memory probe (static glibc arm64)
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           aarch64-linux-gnu-gcc -O2 -static -o app/src/main/jniLibs/arm64-v8a/libmprobe.so scripts/mprobe.c
+          ls -l app/src/main/jniLibs/arm64-v8a
+
+      - name: Set up QEMU (arm64)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build musl probe and mprotect shim (Alpine arm64)
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 -v "$PWD":/w alpine:3.21 sh -c '
+            apk add --no-cache gcc musl-dev >/dev/null &&
+            gcc -O2 -static -o /w/app/src/main/jniLibs/arm64-v8a/libmprobe_musl.so /w/scripts/mprobe.c &&
+            gcc -O2 -shared -fPIC -o /w/app/src/main/jniLibs/arm64-v8a/libmpshim.so /w/scripts/mpshim.c
+          '
           ls -l app/src/main/jniLibs/arm64-v8a
 
       - name: Set up Gradle
@@ -65,9 +80,6 @@ jobs:
           APKSIGNER="$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/ | sort -V | tail -n 1)apksigner"
           {
             echo "## APK report"
-            echo ""
-            echo "Keystore fingerprint:"
-            keytool -list -v -keystore ~/.android/debug.keystore -storepass android 2>/dev/null | grep "SHA256:" | sed 's/^/  - /' || true
             echo ""
             for f in app/build/outputs/apk/modern/debug/app-modern-debug.apk app/build/outputs/apk/legacy/debug/app-legacy-debug.apk; do
               echo "- $(basename "$f"): $(du -h "$f" | cut -f1)"
