@@ -11,33 +11,34 @@ android {
     defaultConfig {
         applicationId = "com.localpdf.app"
         minSdk = 29
-        versionCode = 3
-        versionName = "0.1.1"
+        targetSdk = 35
+        versionCode = 4
+        versionName = "0.1.2"
+        manifestPlaceholders["appLabel"] = "LocalPDF"
 
         ndk {
             abiFilters.add("arm64-v8a")
         }
     }
 
-    flavorDimensions += "mode"
-
-    productFlavors {
-        create("modern") {
-            dimension = "mode"
-            targetSdk = 35
-            manifestPlaceholders["appLabel"] = "LocalPDF"
-        }
-        create("legacy") {
-            dimension = "mode"
-            minSdk = 28
-            targetSdk = 28
-            applicationIdSuffix = ".legacy"
-            versionNameSuffix = "-legacy"
-            manifestPlaceholders["appLabel"] = "LocalPDF Legacy"
+    signingConfigs {
+        create("shared") {
+            val keystorePath = System.getenv("LOCALPDF_KEYSTORE")
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
     buildTypes {
+        debug {
+            if (System.getenv("LOCALPDF_KEYSTORE") != null) {
+                signingConfig = signingConfigs.getByName("shared")
+            }
+        }
         release {
             isMinifyEnabled = false
         }
