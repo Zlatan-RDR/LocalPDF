@@ -2,11 +2,13 @@ package com.localpdf.app
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.StatFs
 import android.system.Os
 import android.system.OsConstants
 import java.io.File
+import java.security.MessageDigest
 
 const val MB = 1024L * 1024L
 
@@ -36,6 +38,21 @@ object Diagnostics {
         }
     }
 
+    private fun signingFingerprint(ctx: Context): String {
+        return try {
+            val info = ctx.packageManager.getPackageInfo(
+                ctx.packageName,
+                PackageManager.GET_SIGNING_CERTIFICATES
+            )
+            val signer = info.signingInfo?.apkContentsSigners?.firstOrNull()
+                ?: return "none"
+            val digest = MessageDigest.getInstance("SHA-256").digest(signer.toByteArray())
+            digest.joinToString("") { "%02x".format(it) }.take(32)
+        } catch (e: Throwable) {
+            "unavailable: ${e.message}"
+        }
+    }
+
     fun securityInfo(ctx: Context): String {
         val domain = try {
             File("/proc/self/attr/current").readText().replace("\u0000", "").trim()
@@ -52,6 +69,7 @@ object Diagnostics {
         return buildString {
             appendLine("Package: ${ctx.packageName}")
             appendLine("Target : ${ctx.applicationInfo.targetSdkVersion}")
+            appendLine("Signer : ${signingFingerprint(ctx)}")
             appendLine("SELinux: $domain")
             appendLine("Status : $status")
         }
