@@ -1,8 +1,8 @@
-FROM --platform=linux/arm64 alpine:3.21 AS core
+FROM --platform=linux/arm64 alpine:3.23 AS core
 
 RUN apk add --no-cache \
       bash ca-certificates tzdata fontconfig ttf-dejavu \
-      openjdk21-jre-headless \
+      openjdk25-jre-headless \
       qpdf ghostscript \
       tesseract-ocr tesseract-ocr-data-eng tesseract-ocr-data-ara \
  && (apk add --no-cache font-noto-arabic || echo "font-noto-arabic is not available") \
