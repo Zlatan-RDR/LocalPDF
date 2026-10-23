@@ -19,10 +19,17 @@ object StirlingServer {
     @Volatile
     private var process: Process? = null
 
+    // If /opt/stirling/natives contains at least one .jar (for example the
+    // jpdfium-natives-linux-arm64 jar), the server is started through Spring Boot's
+    // PropertiesLauncher with loader.path so those jars join the classpath.
+    // Otherwise the original "java -jar" command is used.
     private val START_SCRIPT = """
 cd /data
 export DISABLE_ADDITIONAL_FEATURES=true
 export LD_PRELOAD=/native/libmpshim.so
+if ls /opt/stirling/natives/*.jar >/dev/null 2>&1; then
+  exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -Dloader.path=/opt/stirling/natives -cp /opt/stirling/Stirling-PDF.jar org.springframework.boot.loader.launch.PropertiesLauncher --server.port=$PORT --server.address=127.0.0.1
+fi
 exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -jar /opt/stirling/Stirling-PDF.jar --server.port=$PORT --server.address=127.0.0.1
 """
 
