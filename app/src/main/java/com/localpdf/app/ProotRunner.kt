@@ -23,7 +23,7 @@ tesseract --list-langs 2>&1
 echo "== files =="
 ls -l /opt/stirling 2>&1
 echo "== java =="
-java -version 2>&1
+LD_PRELOAD=/native/libmpshim.so java -version 2>&1
 """
 
     private const val JAVA_DIAG_SCRIPT = """
@@ -99,18 +99,7 @@ head -n 3 /proc/meminfo 2>&1
         }
     }
 
-    fun prootVersion(ctx: Context): String {
-        val r = execute(ctx, listOf("${nativeDir(ctx)}/libproot.so", "--version"), false, 10)
-        return "exit=${r.exit}\n${r.output}"
-    }
-
-    fun runInGuest(
-        ctx: Context,
-        script: String,
-        noSeccomp: Boolean = false,
-        timeoutSec: Long = 90,
-        bindNative: Boolean = false
-    ): ProcResult {
+    private fun guestCommand(ctx: Context, script: String, bindNative: Boolean): List<String> {
         val rootfs = Installer.rootfsDir(ctx)
         val cmd = mutableListOf(
             "${nativeDir(ctx)}/libproot.so",
@@ -138,14 +127,37 @@ head -n 3 /proc/meminfo 2>&1
                 "/bin/sh", "-c", script
             )
         )
-        return execute(ctx, cmd, noSeccomp, timeoutSec)
+        return cmd
+    }
+
+    fun prootVersion(ctx: Context): String {
+        val r = execute(ctx, listOf("${nativeDir(ctx)}/libproot.so", "--version"), false, 10)
+        return "exit=${r.exit}\n${r.output}"
+    }
+
+    fun runInGuest(
+        ctx: Context,
+        script: String,
+        noSeccomp: Boolean = false,
+        timeoutSec: Long = 90,
+        bindNative: Boolean = false
+    ): ProcResult {
+        return execute(ctx, guestCommand(ctx, script, bindNative), noSeccomp, timeoutSec)
+    }
+
+    fun startGuest(ctx: Context, script: String, logFile: File): Process {
+        val pb = ProcessBuilder(guestCommand(ctx, script, true))
+        pb.redirectErrorStream(true)
+        pb.redirectOutput(ProcessBuilder.Redirect.to(logFile))
+        applyEnv(ctx, pb.environment(), false)
+        return pb.start()
     }
 
     fun guestTest(ctx: Context): String {
         if (!Installer.isCoreInstalled(ctx)) return "Core is not installed yet"
-        val first = runInGuest(ctx, TEST_SCRIPT)
+        val first = runInGuest(ctx, TEST_SCRIPT, bindNative = true)
         if (first.exit == 0) return "exit=0\n${first.output}"
-        val second = runInGuest(ctx, TEST_SCRIPT, noSeccomp = true)
+        val second = runInGuest(ctx, TEST_SCRIPT, noSeccomp = true, bindNative = true)
         return "attempt 1 (default): exit=${first.exit}\n${first.output}\n" +
             "attempt 2 (PROOT_NO_SECCOMP=1): exit=${second.exit}\n${second.output}"
     }
