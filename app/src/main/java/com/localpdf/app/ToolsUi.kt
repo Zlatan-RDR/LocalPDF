@@ -5,7 +5,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -221,7 +220,12 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
         mutableStateMapOf<String, String>().apply {
             tool.fields.forEach { f ->
                 val d = f.default
-                if (d != null) put(f.name, d)
+                if (d != null) {
+                    put(f.name, d)
+                } else if (f.type == FieldType.CHOICE && f.required) {
+                    val first = f.options.firstOrNull { it.isNotEmpty() }
+                    if (first != null) put(f.name, first)
+                }
             }
         }
     }
@@ -258,10 +262,18 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
         }
     }
 
-    val fileFields = tool.fields.filter { it.type == FieldType.FILE || it.type == FieldType.FILES }
+    val visibleFields = tool.fields.filter { it.name != "fileId" }
+    val fileFields = visibleFields.filter { it.type == FieldType.FILE || it.type == FieldType.FILES }
     val anyFile = fileFields.any { !files[it.name].isNullOrEmpty() }
-    val missingRequired = fileFields.any { it.required && files[it.name].isNullOrEmpty() }
-    val canRun = !running && !tool.disabled && anyFile && !missingRequired
+    val missingFile = fileFields.any { it.required && files[it.name].isNullOrEmpty() }
+    val missingText = visibleFields.filter {
+        it.required &&
+            it.type != FieldType.FILE &&
+            it.type != FieldType.FILES &&
+            it.type != FieldType.BOOL &&
+            values[it.name].isNullOrBlank()
+    }
+    val canRun = !running && !tool.disabled && anyFile && !missingFile && missingText.isEmpty()
 
     Column(
         modifier = Modifier
@@ -293,7 +305,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
         }
         Spacer(modifier = Modifier.height(12.dp))
 
-        for (f in tool.fields) {
+        for (f in visibleFields) {
             when (f.type) {
                 FieldType.FILE, FieldType.FILES -> {
                     val chosen = files[f.name].orEmpty()
@@ -355,6 +367,14 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                 Text(text = d.take(160), fontSize = 11.sp)
             }
             Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        if (missingText.isNotEmpty()) {
+            Text(
+                text = "حقول مطلوبة ناقصة: " + missingText.joinToString { it.label },
+                fontSize = 12.sp
+            )
+            Spacer(modifier = Modifier.height(4.dp))
         }
 
         Button(
