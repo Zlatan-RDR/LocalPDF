@@ -1,18 +1,31 @@
-FROM --platform=linux/arm64 alpine:3.23 AS core
+FROM --platform=linux/arm64 debian:trixie-slim AS core
 
-RUN apk add --no-cache \
-      bash ca-certificates tzdata fontconfig ttf-dejavu \
-      openjdk25-jre-headless \
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      bash ca-certificates curl tzdata fontconfig fonts-dejavu-core \
+      libfreetype6 \
       qpdf ghostscript \
-      tesseract-ocr tesseract-ocr-data-eng tesseract-ocr-data-ara \
- && (apk add --no-cache font-noto-arabic || echo "font-noto-arabic is not available") \
- && rm -rf /usr/share/man /usr/share/doc /usr/share/info /usr/share/licenses \
+      tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/man /usr/share/info
+
+RUN mkdir -p /opt/java/openjdk \
+ && curl -fsSL "https://api.adoptium.net/v3/binary/latest/25/ga/linux/aarch64/jre/hotspot/normal/eclipse" -o /tmp/jre.tar.gz \
+ && tar -xzf /tmp/jre.tar.gz -C /opt/java/openjdk --strip-components=1 \
+ && rm -f /tmp/jre.tar.gz \
+ && mkdir -p /usr/lib/jvm \
+ && ln -s /opt/java/openjdk /usr/lib/jvm/default-jvm \
+ && ln -s /opt/java/openjdk/bin/java /usr/local/bin/java \
+ && ln -s /usr/share/tesseract-ocr/5/tessdata /usr/share/tessdata \
  && mkdir -p /opt/stirling /data /work \
  && chmod 1777 /work
 
 FROM core AS office
 
-RUN apk add --no-cache \
-      libreoffice-common libreoffice-writer libreoffice-calc libreoffice-impress \
-      font-liberation \
- && rm -rf /usr/share/man /usr/share/doc /usr/share/info /usr/share/licenses
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libreoffice-writer libreoffice-calc libreoffice-impress fonts-liberation \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/man /usr/share/info
