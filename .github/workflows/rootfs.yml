@@ -59,6 +59,47 @@ jobs:
             unzip -Z1 out/stirling-server.jar | grep -i -E 'jpdfium|\.so($|\.)|linux-' | head -n 80 | sed 's/^/- /' || true
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Fetch JPDFium linux-arm64 natives
+        run: |
+          set -uo pipefail
+          mkdir -p rootfs/natives
+          rm -f rootfs/natives/*.jar
+          {
+            echo ""
+            echo "## JPDFium arm64 natives"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          VER="$(unzip -Z1 out/stirling-server.jar | grep -oE 'BOOT-INF/lib/jpdfium-[0-9][^/]*\.jar' | head -n 1 | sed -E 's#BOOT-INF/lib/jpdfium-(.*)\.jar#\1#')"
+          if [ -z "$VER" ]; then
+            echo "- FAILED: could not read the jpdfium version from the jar" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "- jpdfium version in the server jar: $VER" >> "$GITHUB_STEP_SUMMARY"
+          NAME="jpdfium-natives-linux-arm64-$VER.jar"
+          OK=0
+          for BASE in \
+            "https://repo1.maven.org/maven2/com/stirling/jpdfium-natives-linux-arm64/$VER" \
+            "https://maven.stirlingpdf.com/com/stirling/jpdfium-natives-linux-arm64/$VER"; do
+            if curl -fsSL --retry 3 -o "rootfs/natives/$NAME" "$BASE/$NAME" && unzip -tq "rootfs/natives/$NAME" >/dev/null 2>&1; then
+              echo "- OK: $NAME downloaded from $BASE" >> "$GITHUB_STEP_SUMMARY"
+              OK=1
+              break
+            fi
+            rm -f "rootfs/natives/$NAME"
+            echo "- not available: $BASE/$NAME" >> "$GITHUB_STEP_SUMMARY"
+          done
+          if [ "$OK" = "1" ]; then
+            {
+              echo ""
+              echo "Contents of $NAME (first 40 entries):"
+              echo ""
+              unzip -Z1 "rootfs/natives/$NAME" | head -n 40 | sed 's/^/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- FAILED: no linux-arm64 natives jar found for version $VER. The pack is built without it." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          ls -l rootfs/natives
+
       - name: Build core and office rootfs
         run: |
           set -euo pipefail
