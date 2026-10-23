@@ -111,9 +111,8 @@ static void shim_loaded(void) {
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
     /*
      * HotSpot's PaX check maps one RW page and then makes it executable.
-     * When that page lands next to the current thread's stack, the kernel
-     * merges the two areas and treats the mprotect as "make the stack
-     * executable", which SELinux denies. Putting the page between two
+     * When that page lands next to another mapping, the kernel merges the
+     * two areas and the mprotect is refused. Putting the page between two
      * PROT_NONE guard pages keeps it in its own area.
      */
     if (addr == NULL && len == PAGE && prot == (PROT_READ | PROT_WRITE) &&
@@ -138,6 +137,10 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
     int e = errno;
     errno = e;
     return r == -1 ? MAP_FAILED : (void *)r;
+}
+
+void *mmap64(void *addr, size_t len, int prot, int flags, int fd, off64_t off) {
+    return mmap(addr, len, prot, flags, fd, (off_t)off);
 }
 
 int mprotect(void *addr, size_t len, int prot) {
