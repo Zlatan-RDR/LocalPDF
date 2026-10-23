@@ -18,7 +18,7 @@ permissions:
 jobs:
   packs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,6 +47,17 @@ jobs:
           fi
           unzip -tq out/stirling-server.jar
           ls -l out
+
+      - name: Inspect the jar (native libraries and platforms)
+        run: |
+          set -euo pipefail
+          {
+            echo "## Jar inspection"
+            echo ""
+            echo "Entries that mention jpdfium, native libraries or platforms:"
+            echo ""
+            unzip -Z1 out/stirling-server.jar | grep -i -E 'jpdfium|\.so($|\.)|linux-' | head -n 80 | sed 's/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build core and office rootfs
         run: |
