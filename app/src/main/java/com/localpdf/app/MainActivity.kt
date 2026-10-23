@@ -72,8 +72,9 @@ fun MainScreen() {
     var fraction by remember { mutableStateOf(-1f) }
     var installed by remember { mutableStateOf(Installer.isCoreInstalled(ctx)) }
     var saved by remember { mutableStateOf(Installer.savedDownloadBytes(ctx)) }
+    var serverUp by remember { mutableStateOf(StirlingServer.isRunning()) }
 
-    SideEffect { view.keepScreenOn = busy }
+    SideEffect { view.keepScreenOn = busy || serverUp }
 
     fun runTask(title: String, block: () -> String) {
         busy = true
@@ -87,6 +88,7 @@ fun MainScreen() {
             status = ""
             fraction = -1f
             saved = Installer.savedDownloadBytes(ctx)
+            serverUp = StirlingServer.isRunning()
             busy = false
         }.start()
     }
@@ -106,19 +108,52 @@ fun MainScreen() {
                 .verticalScroll(rememberScrollState())
         ) {
             Text(
-                text = "LocalPDF - المرحلة 1",
+                text = "LocalPDF - المرحلة 2",
                 style = MaterialTheme.typography.titleLarge
+            )
+            Text(
+                text = if (serverUp) "خادم Stirling: يعمل" else "خادم Stirling: متوقف",
+                fontSize = 14.sp
             )
             Spacer(modifier = Modifier.height(12.dp))
 
             Button(
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !busy && installed,
+                enabled = !busy && installed && !serverUp,
                 onClick = {
-                    runTask("تشخيص Java (errno + musl)") { ProotRunner.javaDiagnostics(ctx) }
+                    runTask("تشغيل Stirling") {
+                        val started = StirlingServer.start(ctx)
+                        val t0 = System.currentTimeMillis()
+                        val ready = StirlingServer.waitReady(300) { s ->
+                            status = "بدء التشغيل... $s ثانية"
+                        }
+                        val secs = (System.currentTimeMillis() - t0) / 1000
+                        buildString {
+                            append(started).append('\n')
+                            if (ready) {
+                                append("الخادم جاهز بعد $secs ثانية\n")
+                            } else {
+                                append("لم يصبح الخادم جاهزاً (${StirlingServer.exitInfo()}) بعد $secs ثانية\n")
+                            }
+                            append("--- آخر السجل ---\n")
+                            append(StirlingServer.tailLog(ctx, 40))
+                        }
+                    }
                 }
             ) {
-                Text("تشخيص Java (errno + musl)")
+                Text("تشغيل Stirling (محلي)")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy && serverUp,
+                onClick = {
+                    runTask("فحص الخادم وقائمة API") { StirlingServer.apiSummary(ctx) }
+                }
+            ) {
+                Text("فحص الخادم وقائمة API")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -127,13 +162,51 @@ fun MainScreen() {
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !busy,
                 onClick = {
-                    runTask("اختبار الذاكرة التنفيذية (mprobe)") {
-                        "== direct (app process) ==\n" + ProotRunner.runProbeDirect(ctx) +
-                            "\n== inside proot ==\n" + ProotRunner.runProbeInProot(ctx)
+                    runTask("سجل Stirling") {
+                        "(${StirlingServer.exitInfo()})\n" + StirlingServer.tailLog(ctx, 80)
                     }
                 }
             ) {
-                Text("اختبار الذاكرة التنفيذية (mprobe)")
+                Text("عرض سجل Stirling")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy && serverUp,
+                onClick = {
+                    runTask("إيقاف Stirling") {
+                        StirlingServer.stop()
+                        "تم الإيقاف"
+                    }
+                }
+            ) {
+                Text("إيقاف Stirling")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy && installed,
+                onClick = {
+                    runTask("اختبار البيئة") { ProotRunner.guestTest(ctx) }
+                }
+            ) {
+                Text("اختبار البيئة (java, qpdf, gs, tesseract)")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy && installed,
+                onClick = {
+                    runTask("تشخيص Java (errno + musl)") { ProotRunner.javaDiagnostics(ctx) }
+                }
+            ) {
+                Text("تشخيص Java (errno + musl)")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -173,32 +246,8 @@ fun MainScreen() {
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { Installer.requestPause() }
                 ) {
-                    Text("إيقاف مؤقت (يحفظ التقدم)")
+                    Text("إيقاف مؤقت للتنزيل (يحفظ التقدم)")
                 }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !busy && installed,
-                onClick = {
-                    runTask("اختبار البيئة") { ProotRunner.guestTest(ctx) }
-                }
-            ) {
-                Text("اختبار البيئة (java, qpdf, gs, tesseract)")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !busy,
-                onClick = {
-                    runTask("proot --version") { ProotRunner.prootVersion(ctx) }
-                }
-            ) {
-                Text("اختبار proot")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
