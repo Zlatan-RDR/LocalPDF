@@ -21,6 +21,11 @@ RUN mkdir -p /opt/java/openjdk \
  && mkdir -p /opt/stirling /data /work \
  && chmod 1777 /work
 
+# JPDFium linux-arm64 natives (downloaded by the workflow into rootfs/natives).
+# StirlingServer.kt adds this folder to the classpath when it contains a .jar.
+RUN mkdir -p /opt/stirling/natives
+COPY natives/ /opt/stirling/natives/
+
 FROM core AS office
 
 ENV DEBIAN_FRONTEND=noninteractive
