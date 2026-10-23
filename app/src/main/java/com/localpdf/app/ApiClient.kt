@@ -26,6 +26,11 @@ object ApiClient {
 
     private const val BASE = "http://127.0.0.1:8080"
 
+    // Maximum size (in UTF-8 bytes) of the file name part of a saved result.
+    // Android limits a single path component to 255 bytes; the saved name also
+    // gets a timestamp prefix, so we keep a safe margin.
+    private const val MAX_NAME_BYTES = 120
+
     fun displayName(ctx: Context, uri: Uri): String {
         try {
             ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
@@ -72,18 +77,25 @@ object ApiClient {
         return String(buf, 0, total, Charsets.UTF_8)
     }
 
+    // Percent-decodes a file name. A literal '+' is kept as '+' (it is not a space
+    // in a file name), so it is escaped before decoding.
+    private fun percentDecode(s: String): String {
+        if (!s.contains('%')) return s
+        return try {
+            URLDecoder.decode(s.replace("+", "%2B"), "UTF-8")
+        } catch (e: Throwable) {
+            s
+        }
+    }
+
     private fun fileNameFromHeader(cd: String?, ctype: String): String {
         if (cd != null) {
             val star = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE).find(cd)
             if (star != null) {
-                return try {
-                    URLDecoder.decode(star.groupValues[1], "UTF-8")
-                } catch (e: Throwable) {
-                    star.groupValues[1]
-                }
+                return percentDecode(star.groupValues[1].trim())
             }
             val plain = Regex("filename=\"?([^\";]+)\"?", RegexOption.IGNORE_CASE).find(cd)
-            if (plain != null) return plain.groupValues[1].trim()
+            if (plain != null) return percentDecode(plain.groupValues[1].trim())
         }
         val ext = when {
             ctype.contains("pdf") -> "pdf"
@@ -101,6 +113,33 @@ object ApiClient {
 
     private fun safeName(name: String): String =
         name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+
+    // Shortens a file name so that its UTF-8 size is at most maxBytes, keeping the
+    // extension and never cutting in the middle of a character.
+    private fun limitBytes(name: String, maxBytes: Int): String {
+        if (name.toByteArray(Charsets.UTF_8).size <= maxBytes) return name
+        val dot = name.lastIndexOf('.')
+        val ext = if (dot > 0 && name.length - dot <= 10) name.substring(dot) else ""
+        val base = if (ext.isEmpty()) name else name.substring(0, dot)
+        val budget = maxBytes - ext.toByteArray(Charsets.UTF_8).size
+        val sb = StringBuilder()
+        var used = 0
+        var i = 0
+        while (i < base.length) {
+            val cp = base.codePointAt(i)
+            val chunk = String(Character.toChars(cp))
+            val n = chunk.toByteArray(Charsets.UTF_8).size
+            if (used + n > budget) break
+            sb.append(chunk)
+            used += n
+            i += Character.charCount(cp)
+        }
+        val result = if (sb.isEmpty()) "file" else sb.toString()
+        return result + ext
+    }
+
+    private fun cleanResultName(raw: String): String =
+        limitBytes(safeName(raw), MAX_NAME_BYTES)
 
     fun run(
         ctx: Context,
@@ -155,10 +194,12 @@ object ApiClient {
                 )
             }
 
-            val name = fileNameFromHeader(conn.getHeaderField("Content-Disposition"), ctype)
+            val name = cleanResultName(
+                fileNameFromHeader(conn.getHeaderField("Content-Disposition"), ctype)
+            )
             val dir = File(ctx.filesDir, "results")
             dir.mkdirs()
-            val outFile = File(dir, "${System.currentTimeMillis()}_${safeName(name)}")
+            val outFile = File(dir, "${System.currentTimeMillis()}_$name")
             conn.inputStream.use { input ->
                 outFile.outputStream().use { o -> input.copyTo(o, 256 * 1024) }
             }
