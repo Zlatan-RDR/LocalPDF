@@ -83,4 +83,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.apache.commons:commons-compress:1.26.2")
     implementation("org.tukaani:xz:1.9")
+
+    // On-device translation (English to Arabic) for long tool descriptions
+    implementation("com.google.mlkit:translate:17.0.3")
+    implementation("com.google.android.gms:play-services-tasks:18.2.0")
 }
