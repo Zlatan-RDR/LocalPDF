@@ -28,9 +28,9 @@ cd /data
 export DISABLE_ADDITIONAL_FEATURES=true
 export LD_PRELOAD=/native/libmpshim.so
 if ls /opt/stirling/natives/*.jar >/dev/null 2>&1; then
-  exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -Dloader.path=/opt/stirling/natives -cp /opt/stirling/Stirling-PDF.jar org.springframework.boot.loader.launch.PropertiesLauncher --server.port=$PORT --server.address=127.0.0.1
+  exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -Dloader.path=/opt/stirling/natives -cp /opt/stirling/Stirling-PDF.jar org.springframework.boot.loader.launch.PropertiesLauncher --server.port=$PORT --server.address=127.0.0.1
 fi
-exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -jar /opt/stirling/Stirling-PDF.jar --server.port=$PORT --server.address=127.0.0.1
+exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -jar /opt/stirling/Stirling-PDF.jar --server.port=$PORT --server.address=127.0.0.1
 """
 
     fun logFile(ctx: Context): File = File(ctx.filesDir, "stirling.log")
@@ -119,6 +119,7 @@ exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Djava.awt.headless
         return false
     }
 
+    // Lists every endpoint of the server (not only the first 60).
     fun apiSummary(ctx: Context): String {
         val sb = StringBuilder()
         for (path in listOf("/v1/api-docs", "/v3/api-docs")) {
@@ -135,8 +136,7 @@ exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Djava.awt.headless
                 while (it.hasNext()) keys.add(it.next())
                 keys.sort()
                 sb.append("$path -> ${keys.size} endpoints, ${r.body.length / 1024} KB saved as openapi.json\n")
-                for (k in keys.take(60)) sb.append(k).append('\n')
-                if (keys.size > 60) sb.append("... and ${keys.size - 60} more\n")
+                for (k in keys) sb.append(k).append('\n')
                 return sb.toString()
             } catch (e: Throwable) {
                 sb.append("$path -> ${e.javaClass.simpleName}: ${e.message}\n")
