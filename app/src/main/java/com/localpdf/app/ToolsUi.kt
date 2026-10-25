@@ -42,18 +42,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private fun groupTitle(g: String): String = when (g) {
-    "analysis" -> "تحليل"
-    "convert" -> "تحويل"
-    "filter" -> "فلترة"
-    "form" -> "نماذج"
-    "general" -> "عام"
-    "misc" -> "متفرقات"
-    "security" -> "أمان"
-    "pipeline" -> "أتمتة"
-    else -> Catalog.humanize(g)
-}
-
 @Composable
 fun ToolsScreen() {
     val ctx = LocalContext.current
@@ -98,11 +86,7 @@ fun ToolsScreen() {
         ToolDetail(tool = current, onBack = { selected = null })
     } else {
         val filtered = remember(tools, query) {
-            tools.filter {
-                query.isBlank() ||
-                    it.title.contains(query, ignoreCase = true) ||
-                    it.path.contains(query, ignoreCase = true)
-            }
+            tools.filter { ArabicNames.matches(it, query) }
         }
         val grouped = remember(filtered) { filtered.groupBy { it.group } }
 
@@ -137,7 +121,7 @@ fun ToolsScreen() {
                     modifier = Modifier.fillMaxWidth(),
                     value = query,
                     onValueChange = { query = it },
-                    label = { Text("بحث") },
+                    label = { Text("بحث (عربي أو إنجليزي)") },
                     singleLine = true
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -149,16 +133,21 @@ fun ToolsScreen() {
                         fontSize = 13.sp
                     )
                 }
+            } else if (filtered.isEmpty()) {
+                item {
+                    Text(text = "لا توجد أداة مطابقة للبحث.", fontSize = 13.sp)
+                }
             }
             for ((group, list) in grouped) {
                 item(key = "header_$group") {
                     Text(
-                        text = groupTitle(group) + " (" + list.size + ")",
+                        text = ArabicNames.groupTitle(group) + " (" + list.size + ")",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
                     )
                 }
                 items(list, key = { it.path }) { t ->
+                    val arabic = ArabicNames.toolName(t)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -166,9 +155,12 @@ fun ToolsScreen() {
                             .padding(vertical = 8.dp)
                     ) {
                         Text(
-                            text = t.title + if (t.disabled) "  (غير متاح)" else "",
+                            text = arabic + if (t.disabled) "  (غير متاح)" else "",
                             fontSize = 15.sp
                         )
+                        if (arabic != t.title) {
+                            Text(text = t.title, fontSize = 12.sp)
+                        }
                         Text(
                             text = t.path,
                             fontSize = 11.sp,
@@ -186,7 +178,7 @@ private fun ChoiceField(field: ToolField, value: String, onChange: (String) -> U
     var expanded by remember { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = field.label + if (field.required) " *" else "",
+            text = ArabicNames.fieldLabel(field) + if (field.required) " *" else "",
             fontSize = 12.sp
         )
         Box {
@@ -223,7 +215,8 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                 if (d != null) {
                     put(f.name, d)
                 } else if (f.type == FieldType.CHOICE && f.required) {
-                    val first = f.options.firstOrNull { it.isNotEmpty() }
+                    val preferred = f.options.firstOrNull { it == "orderProvided" }
+                    val first = preferred ?: f.options.firstOrNull { it.isNotEmpty() }
                     if (first != null) put(f.name, first)
                 }
             }
@@ -282,7 +275,11 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
     ) {
         OutlinedButton(onClick = onBack) { Text("رجوع إلى القائمة") }
         Spacer(modifier = Modifier.height(8.dp))
-        Text(text = tool.title, style = MaterialTheme.typography.titleLarge)
+        val arabicTitle = ArabicNames.toolName(tool)
+        Text(text = arabicTitle, style = MaterialTheme.typography.titleLarge)
+        if (arabicTitle != tool.title) {
+            Text(text = tool.title, fontSize = 13.sp)
+        }
         Text(text = tool.path, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
         val desc = tool.description
         if (desc != null) {
@@ -306,6 +303,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(12.dp))
 
         for (f in visibleFields) {
+            val label = ArabicNames.fieldLabel(f)
             when (f.type) {
                 FieldType.FILE, FieldType.FILES -> {
                     val chosen = files[f.name].orEmpty()
@@ -317,7 +315,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                         }
                     ) {
                         val verb = if (f.type == FieldType.FILE) "اختر ملفاً" else "اختر ملفات"
-                        Text(verb + ": " + f.label + if (f.required) " *" else "")
+                        Text(verb + ": " + label + if (f.required) " *" else "")
                     }
                     if (chosen.isNotEmpty()) {
                         val names = chosen.take(3).joinToString { ApiClient.displayName(ctx, it) }
@@ -333,7 +331,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                             onCheckedChange = { values[f.name] = it.toString() }
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = f.label, fontSize = 14.sp)
+                        Text(text = label, fontSize = 14.sp)
                     }
                 }
 
@@ -351,7 +349,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                         value = values[f.name].orEmpty(),
                         onValueChange = { values[f.name] = it },
-                        label = { Text(f.label + if (f.required) " *" else "") },
+                        label = { Text(label + if (f.required) " *" else "") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
                             keyboardType = if (numeric) KeyboardType.Decimal else KeyboardType.Text
@@ -371,7 +369,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
 
         if (missingText.isNotEmpty()) {
             Text(
-                text = "حقول مطلوبة ناقصة: " + missingText.joinToString { it.label },
+                text = "حقول مطلوبة ناقصة: " + missingText.joinToString { ArabicNames.fieldLabel(it) },
                 fontSize = 12.sp
             )
             Spacer(modifier = Modifier.height(4.dp))
