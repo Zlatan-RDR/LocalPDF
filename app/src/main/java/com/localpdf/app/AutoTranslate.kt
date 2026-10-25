@@ -60,8 +60,12 @@ object AutoTranslate {
     private var initialized = false
     private lateinit var appCtx: Context
 
-    var enabled by mutableStateOf(false)
-        private set
+    // "enabled" is read-only on purpose: a property with a setter would clash with
+    // the setEnabled(Boolean) function below (same JVM signature).
+    private val enabledState = mutableStateOf(false)
+    val enabled: Boolean
+        get() = enabledState.value
+
     var modelReady by mutableStateOf(false)
         private set
     var busy by mutableStateOf(false)
@@ -92,14 +96,14 @@ object AutoTranslate {
         if (initialized) return
         initialized = true
         appCtx = ctx.applicationContext
-        enabled = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        enabledState.value = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_ENABLED, false)
         loadCache()
         refreshModelState()
     }
 
     fun setEnabled(value: Boolean) {
-        enabled = value
+        enabledState.value = value
         appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_ENABLED, value)
@@ -111,7 +115,7 @@ object AutoTranslate {
             try {
                 modelReady = await(
                     RemoteModelManager.getInstance().isModelDownloaded(remoteModel()),
-                    20
+                    20L
                 )
             } catch (e: Throwable) {
                 modelReady = false
@@ -125,9 +129,11 @@ object AutoTranslate {
         status = Lang.t("جارٍ تنزيل نموذج الترجمة...", "Downloading the translation model...")
         executor.execute {
             try {
-                val conditions = DownloadConditions.Builder().apply {
-                    if (wifiOnly) requireWifi()
-                }.build()
+                val builder = DownloadConditions.Builder()
+                if (wifiOnly) {
+                    builder.requireWifi()
+                }
+                val conditions = builder.build()
                 await(translator.downloadModelIfNeeded(conditions), 15 * 60L)
                 modelReady = true
                 setEnabled(true)
@@ -147,7 +153,7 @@ object AutoTranslate {
         busy = true
         executor.execute {
             try {
-                await(RemoteModelManager.getInstance().deleteDownloadedModel(remoteModel()), 60)
+                await(RemoteModelManager.getInstance().deleteDownloadedModel(remoteModel()), 60L)
                 modelReady = false
                 setEnabled(false)
                 status = Lang.t("تم حذف نموذج الترجمة.", "Translation model deleted.")
@@ -203,9 +209,17 @@ object AutoTranslate {
         if (busy || !modelReady) return
         val texts = LinkedHashSet<String>()
         for (t in tools) {
-            t.description?.take(300)?.let { if (it.isNotBlank()) texts.add(it) }
+            val td = t.description
+            if (td != null) {
+                val s = td.take(300)
+                if (s.isNotBlank()) texts.add(s)
+            }
             for (f in t.fields) {
-                f.description?.take(160)?.let { if (it.isNotBlank()) texts.add(it) }
+                val fd = f.description
+                if (fd != null) {
+                    val s = fd.take(160)
+                    if (s.isNotBlank()) texts.add(s)
+                }
             }
         }
         val todo = texts.filter { !cache.containsKey(it) }
@@ -265,7 +279,7 @@ object AutoTranslate {
         for ((wrong, right) in FIXES) {
             result = result.replace(wrong, right)
         }
-        return result.ifEmpty { null }
+        return if (result.isEmpty()) null else result
     }
 
     private fun translateSentence(s: String): String? {
@@ -275,25 +289,25 @@ object AutoTranslate {
         val masked = PROTECT.replace(s) { m ->
             val id = tokens.size
             tokens.add(m.value)
-            "$MARK_PREFIX$id$MARK_SUFFIX"
+            MARK_PREFIX + id + MARK_SUFFIX
         }
         if (tokens.isNotEmpty()) {
-            val first = await(translator.translate(masked), 60)
+            val first: String = await(translator.translate(masked), 60L)
             val restored = unmask(first, tokens)
             if (restored != null) return restored
         }
-        val plain = await(translator.translate(s), 60)
-        return plain.ifBlank { null }
+        val plain: String = await(translator.translate(s), 60L)
+        return if (plain.isBlank()) null else plain
     }
 
     private fun unmask(text: String, tokens: List<String>): String? {
         var result = text
         for (i in tokens.indices) {
-            val mark = "$MARK_PREFIX$i$MARK_SUFFIX"
+            val mark = MARK_PREFIX + i + MARK_SUFFIX
             if (!result.contains(mark)) return null
             result = result.replace(mark, tokens[i])
         }
-        return result.ifBlank { null }
+        return if (result.isBlank()) null else result
     }
 
     private fun loadCache() {
@@ -301,9 +315,9 @@ object AutoTranslate {
             val f = File(appCtx.filesDir, CACHE_FILE)
             if (!f.isFile) return
             val o = JSONObject(f.readText())
-            val it = o.keys()
-            while (it.hasNext()) {
-                val k = it.next()
+            val keys = o.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
                 cache[k] = o.getString(k)
             }
         } catch (e: Throwable) {
@@ -315,7 +329,9 @@ object AutoTranslate {
     private fun saveCache() {
         try {
             val o = JSONObject()
-            for ((k, v) in cache.entries.toList()) o.put(k, v)
+            for ((k, v) in cache.entries.toList()) {
+                o.put(k, v)
+            }
             File(appCtx.filesDir, CACHE_FILE).writeText(o.toString())
         } catch (e: Throwable) {
             // ignore: the cache is only an optimization
