@@ -29,6 +29,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,13 +38,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
 fun ToolsScreen() {
+    val ctx = LocalContext.current
+    Lang.init(ctx)
+    val dir = if (Lang.arabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+    CompositionLocalProvider(LocalLayoutDirection provides dir) {
+        ToolsContent()
+    }
+}
+
+@Composable
+private fun ToolsContent() {
     val ctx = LocalContext.current
     var tools by remember { mutableStateOf(Catalog.load(ctx)) }
     var selected by remember { mutableStateOf<Tool?>(null) }
@@ -60,22 +73,31 @@ fun ToolsScreen() {
                     info = StirlingServer.start(ctx)
                 }
                 val ready = StirlingServer.waitReady(300) { s ->
-                    info = "بدء التشغيل... $s ثانية"
+                    info = Lang.t("بدء التشغيل... $s ثانية", "Starting... $s s")
                 }
                 if (ready) {
                     val r = StirlingServer.httpGet("/v1/api-docs", 30000, 12 * 1024 * 1024)
                     if (r.code == 200) {
                         Catalog.saveSpec(ctx, r.body)
                         tools = Catalog.load(ctx)
-                        info = "تم تحميل ${tools.size} أداة"
+                        info = Lang.t("تم تحميل ${tools.size} أداة", "Loaded ${tools.size} tools")
                     } else {
-                        info = "فشل تحميل الأدوات: HTTP ${r.code}"
+                        info = Lang.t(
+                            "فشل تحميل الأدوات: HTTP ${r.code}",
+                            "Failed to load tools: HTTP ${r.code}"
+                        )
                     }
                 } else {
-                    info = "لم يصبح الخادم جاهزاً (${StirlingServer.exitInfo()})"
+                    info = Lang.t(
+                        "لم يصبح الخادم جاهزاً (${StirlingServer.exitInfo()})",
+                        "The server did not become ready (${StirlingServer.exitInfo()})"
+                    )
                 }
             } catch (e: Throwable) {
-                info = "خطأ: ${e.javaClass.simpleName}: ${e.message}"
+                info = Lang.t(
+                    "خطأ: ${e.javaClass.simpleName}: ${e.message}",
+                    "Error: ${e.javaClass.simpleName}: ${e.message}"
+                )
             }
             busy = false
         }.start()
@@ -92,9 +114,25 @@ fun ToolsScreen() {
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             item {
-                Text(text = "الأدوات", style = MaterialTheme.typography.titleLarge)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = Lang.t("الأدوات", "Tools"),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedButton(onClick = { Lang.set(ctx, !Lang.arabic) }) {
+                        Text(Lang.t("English", "العربية"))
+                    }
+                }
                 Text(
-                    text = if (serverUp) "الخادم: يعمل" else "الخادم: متوقف",
+                    text = if (serverUp) {
+                        Lang.t("الخادم: يعمل", "Server: running")
+                    } else {
+                        Lang.t("الخادم: متوقف", "Server: stopped")
+                    },
                     fontSize = 14.sp
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -105,7 +143,13 @@ fun ToolsScreen() {
                     enabled = !busy,
                     onClick = { startAndRefresh() }
                 ) {
-                    Text(if (serverUp) "تحديث قائمة الأدوات" else "تشغيل الخادم وتحميل الأدوات")
+                    Text(
+                        if (serverUp) {
+                            Lang.t("تحديث قائمة الأدوات", "Refresh tools list")
+                        } else {
+                            Lang.t("تشغيل الخادم وتحميل الأدوات", "Start server and load tools")
+                        }
+                    )
                 }
                 if (busy) {
                     Spacer(modifier = Modifier.height(8.dp))
@@ -121,33 +165,53 @@ fun ToolsScreen() {
                     modifier = Modifier.fillMaxWidth(),
                     value = query,
                     onValueChange = { query = it },
-                    label = { Text("بحث (عربي أو إنجليزي)") },
+                    label = { Text(Lang.t("بحث (عربي أو إنجليزي)", "Search (Arabic or English)")) },
                     singleLine = true
                 )
                 Spacer(modifier = Modifier.height(8.dp))
+                if (tools.isNotEmpty()) {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { info = TranslationExport.copyToClipboard(ctx, tools) }
+                    ) {
+                        Text(
+                            Lang.t(
+                                "نسخ النصوص الإنجليزية غير المترجمة",
+                                "Copy untranslated English texts"
+                            )
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
             }
             if (tools.isEmpty()) {
                 item {
                     Text(
-                        text = "لا توجد قائمة أدوات بعد. اضغط الزر أعلاه لتشغيل الخادم وتحميلها.",
+                        text = Lang.t(
+                            "لا توجد قائمة أدوات بعد. اضغط الزر أعلاه لتشغيل الخادم وتحميلها.",
+                            "No tools list yet. Press the button above to start the server and load it."
+                        ),
                         fontSize = 13.sp
                     )
                 }
             } else if (filtered.isEmpty()) {
                 item {
-                    Text(text = "لا توجد أداة مطابقة للبحث.", fontSize = 13.sp)
+                    Text(
+                        text = Lang.t("لا توجد أداة مطابقة للبحث.", "No tool matches the search."),
+                        fontSize = 13.sp
+                    )
                 }
             }
             for ((group, list) in grouped) {
                 item(key = "header_$group") {
                     Text(
-                        text = ArabicNames.groupTitle(group) + " (" + list.size + ")",
+                        text = Lang.groupTitle(group) + " (" + list.size + ")",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
                     )
                 }
                 items(list, key = { it.path }) { t ->
-                    val arabic = ArabicNames.toolName(t)
+                    val shown = Lang.toolName(t)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -155,10 +219,10 @@ fun ToolsScreen() {
                             .padding(vertical = 8.dp)
                     ) {
                         Text(
-                            text = arabic + if (t.disabled) "  (غير متاح)" else "",
+                            text = shown + if (t.disabled) Lang.t("  (غير متاح)", "  (unavailable)") else "",
                             fontSize = 15.sp
                         )
-                        if (arabic != t.title) {
+                        if (shown != t.title) {
                             Text(text = t.title, fontSize = 12.sp)
                         }
                         Text(
@@ -176,9 +240,10 @@ fun ToolsScreen() {
 @Composable
 private fun ChoiceField(field: ToolField, value: String, onChange: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val defaultText = Lang.t("(افتراضي)", "(default)")
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = ArabicNames.fieldLabel(field) + if (field.required) " *" else "",
+            text = Lang.fieldLabel(field) + if (field.required) " *" else "",
             fontSize = 12.sp
         )
         Box {
@@ -186,12 +251,12 @@ private fun ChoiceField(field: ToolField, value: String, onChange: (String) -> U
                 modifier = Modifier.fillMaxWidth(),
                 onClick = { expanded = true }
             ) {
-                Text(if (value.isEmpty()) "(افتراضي)" else value)
+                Text(if (value.isEmpty()) defaultText else value)
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 field.options.forEach { opt ->
                     DropdownMenuItem(
-                        text = { Text(if (opt.isEmpty()) "(افتراضي)" else opt) },
+                        text = { Text(if (opt.isEmpty()) defaultText else opt) },
                         onClick = {
                             onChange(opt)
                             expanded = false
@@ -248,9 +313,9 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                 ctx.contentResolver.openOutputStream(uri)?.use { o ->
                     src.inputStream().use { i -> i.copyTo(o, 64 * 1024) }
                 }
-                "تم الحفظ"
+                Lang.t("تم الحفظ", "Saved")
             } catch (e: Throwable) {
-                "فشل الحفظ: ${e.message}"
+                Lang.t("فشل الحفظ: ${e.message}", "Save failed: ${e.message}")
             }
         }
     }
@@ -273,11 +338,11 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
-        OutlinedButton(onClick = onBack) { Text("رجوع إلى القائمة") }
+        OutlinedButton(onClick = onBack) { Text(Lang.t("رجوع إلى القائمة", "Back to list")) }
         Spacer(modifier = Modifier.height(8.dp))
-        val arabicTitle = ArabicNames.toolName(tool)
-        Text(text = arabicTitle, style = MaterialTheme.typography.titleLarge)
-        if (arabicTitle != tool.title) {
+        val shownTitle = Lang.toolName(tool)
+        Text(text = shownTitle, style = MaterialTheme.typography.titleLarge)
+        if (shownTitle != tool.title) {
             Text(text = tool.title, fontSize = 13.sp)
         }
         Text(text = tool.path, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
@@ -289,21 +354,27 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
         if (tool.disabled) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "هذه الأداة تحتاج برامج غير مثبتة بعد، لذلك لا يمكن تشغيلها الآن.",
+                text = Lang.t(
+                    "هذه الأداة تحتاج برامج غير مثبتة بعد، لذلك لا يمكن تشغيلها الآن.",
+                    "This tool needs programs that are not installed yet, so it cannot run now."
+                ),
                 fontSize = 13.sp
             )
         }
         if (tool.unsupportedFields.isNotEmpty()) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "حقول غير مدعومة في الواجهة العامة: " + tool.unsupportedFields.joinToString(),
+                text = Lang.t(
+                    "حقول غير مدعومة في الواجهة العامة: ",
+                    "Fields not supported in the generic UI: "
+                ) + tool.unsupportedFields.joinToString(),
                 fontSize = 12.sp
             )
         }
         Spacer(modifier = Modifier.height(12.dp))
 
         for (f in visibleFields) {
-            val label = ArabicNames.fieldLabel(f)
+            val label = Lang.fieldLabel(f)
             when (f.type) {
                 FieldType.FILE, FieldType.FILES -> {
                     val chosen = files[f.name].orEmpty()
@@ -314,13 +385,20 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                             picker.launch(arrayOf("*/*"))
                         }
                     ) {
-                        val verb = if (f.type == FieldType.FILE) "اختر ملفاً" else "اختر ملفات"
+                        val verb = if (f.type == FieldType.FILE) {
+                            Lang.t("اختر ملفاً", "Choose a file")
+                        } else {
+                            Lang.t("اختر ملفات", "Choose files")
+                        }
                         Text(verb + ": " + label + if (f.required) " *" else "")
                     }
                     if (chosen.isNotEmpty()) {
                         val names = chosen.take(3).joinToString { ApiClient.displayName(ctx, it) }
                         val more = if (chosen.size > 3) " ..." else ""
-                        Text(text = "المحدد (${chosen.size}): $names$more", fontSize = 12.sp)
+                        Text(
+                            text = Lang.t("المحدد", "Selected") + " (${chosen.size}): $names$more",
+                            fontSize = 12.sp
+                        )
                     }
                 }
 
@@ -356,7 +434,10 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                         )
                     )
                     if (f.type == FieldType.LIST) {
-                        Text(text = "افصل بين القيم بفاصلة", fontSize = 11.sp)
+                        Text(
+                            text = Lang.t("افصل بين القيم بفاصلة", "Separate values with commas"),
+                            fontSize = 11.sp
+                        )
                     }
                 }
             }
@@ -369,7 +450,8 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
 
         if (missingText.isNotEmpty()) {
             Text(
-                text = "حقول مطلوبة ناقصة: " + missingText.joinToString { ArabicNames.fieldLabel(it) },
+                text = Lang.t("حقول مطلوبة ناقصة: ", "Missing required fields: ") +
+                    missingText.joinToString { Lang.fieldLabel(it) },
                 fontSize = 12.sp
             )
             Spacer(modifier = Modifier.height(4.dp))
@@ -398,21 +480,22 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                 }.start()
             }
         ) {
-            Text("تشغيل")
+            Text(Lang.t("تشغيل", "Run"))
         }
 
         if (running) {
             Spacer(modifier = Modifier.height(8.dp))
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            Text(text = "جارٍ التنفيذ...", fontSize = 13.sp)
+            Text(text = Lang.t("جارٍ التنفيذ...", "Running..."), fontSize = 13.sp)
         }
 
         val r = result
         if (r != null) {
             Spacer(modifier = Modifier.height(12.dp))
             if (r.ok && r.file != null) {
+                val secs = "%.1f".format(r.millis / 1000.0)
                 Text(
-                    text = "تم بنجاح في " + "%.1f".format(r.millis / 1000.0) + " ثانية",
+                    text = Lang.t("تم بنجاح في $secs ثانية", "Done in $secs s"),
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(
@@ -424,7 +507,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { saver.launch(r.fileName) }
                 ) {
-                    Text("حفظ النتيجة في الجهاز")
+                    Text(Lang.t("حفظ النتيجة في الجهاز", "Save result to device"))
                 }
                 if (saveMsg.isNotEmpty()) {
                     Text(text = saveMsg, fontSize = 13.sp)
@@ -440,7 +523,10 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
                     Text(text = preview, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                 }
             } else {
-                Text(text = "فشل التنفيذ", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = Lang.t("فشل التنفيذ", "Execution failed"),
+                    style = MaterialTheme.typography.titleMedium
+                )
                 Text(text = r.message, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
             }
         }
