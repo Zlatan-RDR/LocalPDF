@@ -44,9 +44,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        Lang.init(applicationContext)
         setContent {
             MaterialTheme {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                val dir = if (Lang.arabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+                CompositionLocalProvider(LocalLayoutDirection provides dir) {
                     AppRoot()
                 }
             }
@@ -92,9 +94,9 @@ class DiagState(private val appCtx: Context) {
 }
 
 private fun phaseName(label: String): String = when (label) {
-    "core" -> "تنزيل النظام"
-    "jar" -> "تنزيل Stirling"
-    "extract" -> "فك الضغط"
+    "core" -> Lang.t("تنزيل النظام", "Downloading system")
+    "jar" -> Lang.t("تنزيل Stirling", "Downloading Stirling")
+    "extract" -> Lang.t("فك الضغط", "Extracting")
     else -> label
 }
 
@@ -103,6 +105,9 @@ fun AppRoot() {
     val ctx = LocalContext.current
     val diag = remember { DiagState(ctx.applicationContext) }
     var tab by remember { mutableStateOf(0) }
+
+    val toolsLabel = Lang.t("الأدوات", "Tools")
+    val diagLabel = Lang.t("التشخيص", "Diagnostics")
 
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -116,14 +121,14 @@ fun AppRoot() {
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (tab == 0) {
-                    Button(onClick = { tab = 0 }) { Text("الأدوات") }
+                    Button(onClick = { tab = 0 }) { Text(toolsLabel) }
                 } else {
-                    OutlinedButton(onClick = { tab = 0 }) { Text("الأدوات") }
+                    OutlinedButton(onClick = { tab = 0 }) { Text(toolsLabel) }
                 }
                 if (tab == 1) {
-                    Button(onClick = { tab = 1 }) { Text("التشخيص") }
+                    Button(onClick = { tab = 1 }) { Text(diagLabel) }
                 } else {
-                    OutlinedButton(onClick = { tab = 1 }) { Text("التشخيص") }
+                    OutlinedButton(onClick = { tab = 1 }) { Text(diagLabel) }
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -150,9 +155,15 @@ fun DiagnosticsScreen(d: DiagState) {
     SideEffect { view.keepScreenOn = d.busy || d.serverUp }
 
     val installLabel = when {
-        d.installed -> "إعادة تثبيت النظام الأساسي"
-        d.saved > 0 -> "متابعة التنزيل (${d.saved / MB} ميغابايت محفوظة)"
-        else -> "تثبيت النظام الأساسي (نحو 260 ميغابايت)"
+        d.installed -> Lang.t("إعادة تثبيت النظام الأساسي", "Reinstall the core system")
+        d.saved > 0 -> Lang.t(
+            "متابعة التنزيل (${d.saved / MB} ميغابايت محفوظة)",
+            "Resume download (${d.saved / MB} MB saved)"
+        )
+        else -> Lang.t(
+            "تثبيت النظام الأساسي (نحو 280 ميغابايت)",
+            "Install the core system (about 280 MB)"
+        )
     }
 
     Column(
@@ -161,7 +172,11 @@ fun DiagnosticsScreen(d: DiagState) {
             .verticalScroll(rememberScrollState())
     ) {
         Text(
-            text = if (d.serverUp) "خادم Stirling: يعمل" else "خادم Stirling: متوقف",
+            text = if (d.serverUp) {
+                Lang.t("خادم Stirling: يعمل", "Stirling server: running")
+            } else {
+                Lang.t("خادم Stirling: متوقف", "Stirling server: stopped")
+            },
             fontSize = 14.sp
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -170,27 +185,32 @@ fun DiagnosticsScreen(d: DiagState) {
             modifier = Modifier.fillMaxWidth(),
             enabled = !d.busy && d.installed && !d.serverUp,
             onClick = {
-                d.runTask("تشغيل Stirling") {
+                d.runTask(Lang.t("تشغيل Stirling", "Start Stirling")) {
                     val started = StirlingServer.start(ctx)
                     val t0 = System.currentTimeMillis()
                     val ready = StirlingServer.waitReady(300) { s ->
-                        d.status = "بدء التشغيل... $s ثانية"
+                        d.status = Lang.t("بدء التشغيل... $s ثانية", "Starting... $s s")
                     }
                     val secs = (System.currentTimeMillis() - t0) / 1000
                     buildString {
                         append(started).append('\n')
                         if (ready) {
-                            append("الخادم جاهز بعد $secs ثانية\n")
+                            append(Lang.t("الخادم جاهز بعد $secs ثانية", "Server ready after $secs s")).append('\n')
                         } else {
-                            append("لم يصبح الخادم جاهزاً (${StirlingServer.exitInfo()}) بعد $secs ثانية\n")
+                            append(
+                                Lang.t(
+                                    "لم يصبح الخادم جاهزاً (${StirlingServer.exitInfo()}) بعد $secs ثانية",
+                                    "The server did not become ready (${StirlingServer.exitInfo()}) after $secs s"
+                                )
+                            ).append('\n')
                         }
-                        append("--- آخر السجل ---\n")
+                        append(Lang.t("--- آخر السجل ---", "--- Last log lines ---")).append('\n')
                         append(StirlingServer.tailLog(ctx, 40))
                     }
                 }
             }
         ) {
-            Text("تشغيل Stirling (محلي)")
+            Text(Lang.t("تشغيل Stirling (محلي)", "Start Stirling (local)"))
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -199,10 +219,12 @@ fun DiagnosticsScreen(d: DiagState) {
             modifier = Modifier.fillMaxWidth(),
             enabled = !d.busy && d.serverUp,
             onClick = {
-                d.runTask("فحص الخادم وقائمة API") { StirlingServer.apiSummary(ctx) }
+                d.runTask(Lang.t("فحص الخادم وقائمة API", "Server check and API list")) {
+                    StirlingServer.apiSummary(ctx)
+                }
             }
         ) {
-            Text("فحص الخادم وقائمة API")
+            Text(Lang.t("فحص الخادم وقائمة API", "Server check and API list"))
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -211,12 +233,12 @@ fun DiagnosticsScreen(d: DiagState) {
             modifier = Modifier.fillMaxWidth(),
             enabled = !d.busy,
             onClick = {
-                d.runTask("سجل Stirling") {
+                d.runTask(Lang.t("سجل Stirling", "Stirling log")) {
                     "(${StirlingServer.exitInfo()})\n" + StirlingServer.tailLog(ctx, 80)
                 }
             }
         ) {
-            Text("عرض سجل Stirling")
+            Text(Lang.t("عرض سجل Stirling", "Show Stirling log"))
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -225,13 +247,13 @@ fun DiagnosticsScreen(d: DiagState) {
             modifier = Modifier.fillMaxWidth(),
             enabled = !d.busy && d.serverUp,
             onClick = {
-                d.runTask("إيقاف Stirling") {
+                d.runTask(Lang.t("إيقاف Stirling", "Stop Stirling")) {
                     StirlingServer.stop()
-                    "تم الإيقاف"
+                    Lang.t("تم الإيقاف", "Stopped")
                 }
             }
         ) {
-            Text("إيقاف Stirling")
+            Text(Lang.t("إيقاف Stirling", "Stop Stirling"))
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -240,10 +262,10 @@ fun DiagnosticsScreen(d: DiagState) {
             modifier = Modifier.fillMaxWidth(),
             enabled = !d.busy && d.installed,
             onClick = {
-                d.runTask("اختبار البيئة") { ProotRunner.guestTest(ctx) }
+                d.runTask(Lang.t("اختبار البيئة", "Environment test")) { ProotRunner.guestTest(ctx) }
             }
         ) {
-            Text("اختبار البيئة (java, qpdf, gs, tesseract)")
+            Text(Lang.t("اختبار البيئة (java, qpdf, gs, tesseract)", "Environment test (java, qpdf, gs, tesseract)"))
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -252,10 +274,12 @@ fun DiagnosticsScreen(d: DiagState) {
             modifier = Modifier.fillMaxWidth(),
             enabled = !d.busy && d.installed,
             onClick = {
-                d.runTask("تشخيص Java (errno + musl)") { ProotRunner.javaDiagnostics(ctx) }
+                d.runTask(Lang.t("تشخيص Java (errno + musl)", "Java diagnostics (errno + musl)")) {
+                    ProotRunner.javaDiagnostics(ctx)
+                }
             }
         ) {
-            Text("تشخيص Java (errno + musl)")
+            Text(Lang.t("تشخيص Java (errno + musl)", "Java diagnostics (errno + musl)"))
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -264,7 +288,7 @@ fun DiagnosticsScreen(d: DiagState) {
             modifier = Modifier.fillMaxWidth(),
             enabled = !d.busy,
             onClick = {
-                d.runTask("تثبيت النظام الأساسي") {
+                d.runTask(Lang.t("تثبيت النظام الأساسي", "Core system install")) {
                     val log = StringBuilder()
                     try {
                         Installer.installCore(
@@ -278,7 +302,7 @@ fun DiagnosticsScreen(d: DiagState) {
                         d.installed = Installer.isCoreInstalled(ctx)
                         log.append("OK")
                     } catch (e: PausedException) {
-                        log.append("تم الإيقاف المؤقت. التقدم محفوظ.")
+                        log.append(Lang.t("تم الإيقاف المؤقت. التقدم محفوظ.", "Paused. Progress is saved."))
                     } catch (e: Throwable) {
                         log.append("ERROR: ${e.javaClass.simpleName}: ${e.message}")
                     }
@@ -295,7 +319,7 @@ fun DiagnosticsScreen(d: DiagState) {
                 modifier = Modifier.fillMaxWidth(),
                 onClick = { Installer.requestPause() }
             ) {
-                Text("إيقاف مؤقت للتنزيل (يحفظ التقدم)")
+                Text(Lang.t("إيقاف مؤقت للتنزيل (يحفظ التقدم)", "Pause download (keeps progress)"))
             }
         }
 
@@ -308,10 +332,12 @@ fun DiagnosticsScreen(d: DiagState) {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, d.report)
                 }
-                ctx.startActivity(Intent.createChooser(send, "مشاركة التقرير"))
+                ctx.startActivity(
+                    Intent.createChooser(send, Lang.t("مشاركة التقرير", "Share report"))
+                )
             }
         ) {
-            Text("مشاركة التقرير")
+            Text(Lang.t("مشاركة التقرير", "Share report"))
         }
 
         if (d.busy) {
