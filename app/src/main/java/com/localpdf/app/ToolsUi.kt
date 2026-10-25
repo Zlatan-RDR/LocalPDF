@@ -49,9 +49,91 @@ import androidx.compose.ui.unit.sp
 fun ToolsScreen() {
     val ctx = LocalContext.current
     Lang.init(ctx)
+    AutoTranslate.init(ctx)
     val dir = if (Lang.arabic) LayoutDirection.Rtl else LayoutDirection.Ltr
     CompositionLocalProvider(LocalLayoutDirection provides dir) {
         ToolsContent()
+    }
+}
+
+@Composable
+private fun TranslateCard(tools: List<Tool>) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = Lang.t("ترجمة الأوصاف على الجهاز", "On-device description translation"),
+            style = MaterialTheme.typography.titleMedium
+        )
+        if (!AutoTranslate.modelReady) {
+            Text(
+                text = Lang.t(
+                    "لترجمة الأوصاف الإنجليزية الطويلة إلى العربية بدون إنترنت، نزّل نموذج الترجمة مرة واحدة (نحو 30 ميغابايت).",
+                    "To translate the long English descriptions to Arabic offline, download the translation model once (about 30 MB)."
+                ),
+                fontSize = 12.sp
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !AutoTranslate.busy,
+                onClick = { AutoTranslate.downloadModel(false) }
+            ) {
+                Text(Lang.t("تنزيل نموذج الترجمة", "Download translation model"))
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = AutoTranslate.enabled,
+                    onCheckedChange = { AutoTranslate.setEnabled(it) }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = Lang.t("ترجمة الأوصاف تلقائياً", "Translate descriptions automatically"),
+                    fontSize = 14.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            if (AutoTranslate.busy && AutoTranslate.total > 0) {
+                LinearProgressIndicator(
+                    progress = {
+                        AutoTranslate.done.toFloat() / AutoTranslate.total.toFloat()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "${AutoTranslate.done} / ${AutoTranslate.total}",
+                    fontSize = 12.sp
+                )
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { AutoTranslate.cancelBatch() }
+                ) {
+                    Text(Lang.t("إيقاف الترجمة", "Stop translating"))
+                }
+            } else {
+                if (tools.isNotEmpty()) {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !AutoTranslate.busy,
+                        onClick = {
+                            AutoTranslate.setEnabled(true)
+                            AutoTranslate.translateAll(tools)
+                        }
+                    ) {
+                        Text(Lang.t("ترجمة جميع الأوصاف الآن", "Translate all descriptions now"))
+                    }
+                }
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !AutoTranslate.busy,
+                    onClick = { AutoTranslate.deleteModel() }
+                ) {
+                    Text(Lang.t("حذف نموذج الترجمة", "Delete translation model"))
+                }
+            }
+        }
+        if (AutoTranslate.status.isNotEmpty()) {
+            Text(text = AutoTranslate.status, fontSize = 12.sp)
+        }
     }
 }
 
@@ -169,6 +251,10 @@ private fun ToolsContent() {
                     singleLine = true
                 )
                 Spacer(modifier = Modifier.height(8.dp))
+                if (Lang.arabic) {
+                    TranslateCard(tools)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
                 if (tools.isNotEmpty()) {
                     OutlinedButton(
                         modifier = Modifier.fillMaxWidth(),
@@ -349,7 +435,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
         val desc = tool.description
         if (desc != null) {
             Spacer(modifier = Modifier.height(4.dp))
-            Text(text = desc.take(300), fontSize = 12.sp)
+            Text(text = AutoTranslate.display(desc.take(300)), fontSize = 12.sp)
         }
         if (tool.disabled) {
             Spacer(modifier = Modifier.height(8.dp))
@@ -443,7 +529,7 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
             }
             val d = f.description
             if (d != null && f.type != FieldType.FILE && f.type != FieldType.FILES) {
-                Text(text = d.take(160), fontSize = 11.sp)
+                Text(text = AutoTranslate.display(d.take(160)), fontSize = 11.sp)
             }
             Spacer(modifier = Modifier.height(8.dp))
         }
