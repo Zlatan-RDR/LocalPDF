@@ -39,6 +39,9 @@ object Installer {
     private const val MARKER = ".localpdf-core-installed"
     private const val MAX_ATTEMPTS = 40
 
+    const val PACK_TOOLS = "tools"
+    const val PACK_OFFICE = "office"
+
     @Volatile
     private var pauseRequested = false
 
@@ -55,6 +58,11 @@ object Installer {
     private fun downloadsDir(ctx: Context): File = File(ctx.filesDir, "downloads")
 
     fun isCoreInstalled(ctx: Context): Boolean = File(rootfsDir(ctx), MARKER).exists()
+
+    private fun packMarker(name: String): String = ".localpdf-pack-$name-installed"
+
+    fun isPackInstalled(ctx: Context, name: String): Boolean =
+        File(rootfsDir(ctx), packMarker(name)).exists()
 
     fun savedDownloadBytes(ctx: Context): Long {
         val files = downloadsDir(ctx).listFiles() ?: return 0L
@@ -121,7 +129,110 @@ object Installer {
         }
     }
 
+    // Runs a long task with the foreground service, the progress notification and the
+    // "finished" notification (shown only when the app is not visible).
+    private fun <T> withBackground(
+        ctx: Context,
+        title: String,
+        onProgress: ProgressCallback,
+        block: (ProgressCallback) -> T
+    ): T {
+        BackgroundWork.begin(ctx, title)
+        val wrapped: ProgressCallback = { label, done, total ->
+            BackgroundWork.progress(ctx, label, done, total)
+            onProgress(label, done, total)
+        }
+        var ok = false
+        var note = ""
+        try {
+            val result = block(wrapped)
+            ok = true
+            return result
+        } catch (e: PausedException) {
+            note = Lang.t("تم الإيقاف المؤقت. التقدم محفوظ.", "Paused. Progress is saved.")
+            throw e
+        } catch (e: Throwable) {
+            note = e.message ?: e.javaClass.simpleName
+            throw e
+        } finally {
+            val text = if (ok) Lang.t("اكتمل التثبيت.", "Installation finished.") else note
+            BackgroundWork.end(ctx, ok, title, text)
+        }
+    }
+
     fun installCore(ctx: Context, onProgress: ProgressCallback, log: (String) -> Unit) {
+        withBackground(
+            ctx,
+            Lang.t("تثبيت النظام الأساسي", "Installing the core system"),
+            onProgress
+        ) { cb -> installCoreInternal(ctx, cb, log) }
+    }
+
+    // Installs an optional pack ("tools" or "office") on top of the installed core.
+    // A pack is a tar.xz that only holds the files added or changed by that pack.
+    fun installPack(ctx: Context, name: String, onProgress: ProgressCallback, log: (String) -> Unit) {
+        val title = if (name == PACK_OFFICE) {
+            Lang.t("تثبيت حزمة Office", "Installing the Office pack")
+        } else {
+            Lang.t("تثبيت حزمة الأدوات", "Installing the tools pack")
+        }
+        withBackground(ctx, title, onProgress) { cb -> installPackInternal(ctx, name, cb, log) }
+    }
+
+    private fun installPackInternal(
+        ctx: Context,
+        name: String,
+        onProgress: ProgressCallback,
+        log: (String) -> Unit
+    ) {
+        pauseRequested = false
+        if (name != PACK_TOOLS && name != PACK_OFFICE) {
+            throw IOException("Unknown pack: $name")
+        }
+        if (!isCoreInstalled(ctx)) {
+            throw IOException("Install the core system first")
+        }
+        if (name == PACK_OFFICE && !isPackInstalled(ctx, PACK_TOOLS)) {
+            throw IOException("Install the tools pack before the Office pack")
+        }
+        val manifest = fetchManifest(log)
+        val files = manifest.getJSONObject("files")
+        val key = "$name.tar.xz"
+        if (!files.has(key)) {
+            throw IOException("The pack \"$name\" is not published in the release yet")
+        }
+        val pack = files.getJSONObject(key)
+        log("Pack $name: ${pack.getLong("bytes") / MB} MB download, ${pack.getLong("installed_bytes") / MB} MB installed")
+
+        val dlDir = downloadsDir(ctx)
+        dlDir.mkdirs()
+        val needed = pack.getLong("installed_bytes") + pack.getLong("bytes") + 200L * MB
+        val free = StatFs(ctx.filesDir.absolutePath).availableBytes
+        if (free < needed) {
+            throw IOException("Not enough storage: need ${needed / MB} MB, free ${free / MB} MB")
+        }
+
+        val t0 = System.currentTimeMillis()
+        val packFile = ensureDownloaded(
+            "${Config.RELEASE_BASE}/$key",
+            pack.getString("sha256"),
+            pack.getLong("bytes"),
+            File(dlDir, key),
+            name,
+            onProgress,
+            log
+        )
+        val t1 = System.currentTimeMillis()
+        log("Download ready (this session: ${(t1 - t0) / 1000} s)")
+
+        extractTarXz(packFile, rootfsDir(ctx), onProgress, log, ctx)
+        File(rootfsDir(ctx), packMarker(name)).writeText(pack.getString("sha256"))
+        packFile.delete()
+        log("Extraction took ${(System.currentTimeMillis() - t1) / 1000} s")
+        log("Pack $name installed")
+    }
+
+    private fun installCoreInternal(ctx: Context, onProgress: ProgressCallback, log: (String) -> Unit) {
         pauseRequested = false
         val manifest = fetchManifest(log)
         val files = manifest.getJSONObject("files")
