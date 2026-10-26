@@ -141,7 +141,38 @@ object ApiClient {
     private fun cleanResultName(raw: String): String =
         limitBytes(safeName(raw), MAX_NAME_BYTES)
 
+    // Runs a tool.  The run is registered as a background task: the foreground service
+    // keeps the process alive when the app is left, and a "finished" notification is
+    // posted when the app is not visible.
     fun run(
+        ctx: Context,
+        tool: Tool,
+        values: Map<String, String>,
+        files: Map<String, List<Uri>>
+    ): RunResult {
+        val title = Lang.toolName(tool)
+        BackgroundWork.begin(ctx, title)
+        var result: RunResult? = null
+        try {
+            val r = runRequest(ctx, tool, values, files)
+            result = r
+            return r
+        } finally {
+            val r = result
+            val ok = r != null && r.ok
+            val text = when {
+                r == null -> Lang.t(
+                    "توقفت المهمة بخطأ غير متوقع",
+                    "The task stopped with an unexpected error"
+                )
+                r.ok -> r.fileName + " (" + (r.bytes / 1024) + " KB)"
+                else -> r.message.take(160)
+            }
+            BackgroundWork.end(ctx, ok, title, text)
+        }
+    }
+
+    private fun runRequest(
         ctx: Context,
         tool: Tool,
         values: Map<String, String>,
