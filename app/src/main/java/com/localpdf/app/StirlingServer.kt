@@ -24,7 +24,9 @@ object StirlingServer {
     private var appCtx: Context? = null
 
     // PATH puts /usr/local/bin first: that is where the java, python3, weasyprint and
-    // unoconvert launchers of the packs live.  If /opt/stirling/natives contains at
+    // unoconvert launchers of the packs live.  SYSTEM_ENABLEURLTOPDF turns on the
+    // "URL to PDF" tool (off by default in Stirling because the server fetches web pages);
+    // the server only listens on 127.0.0.1.  If /opt/stirling/natives contains at
     // least one .jar (jpdfium-natives-linux-arm64), the server is started through Spring
     // Boot's PropertiesLauncher with loader.path so those jars join the classpath.
     private val START_SCRIPT = """
@@ -32,6 +34,7 @@ cd /data
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export HOME=/root
 export DISABLE_ADDITIONAL_FEATURES=true
+export SYSTEM_ENABLEURLTOPDF=true
 export LD_PRELOAD=/native/libmpshim.so
 if ls /opt/stirling/natives/*.jar >/dev/null 2>&1; then
   exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -Dloader.path=/opt/stirling/natives -cp /opt/stirling/Stirling-PDF.jar org.springframework.boot.loader.launch.PropertiesLauncher --server.port=$PORT --server.address=127.0.0.1
