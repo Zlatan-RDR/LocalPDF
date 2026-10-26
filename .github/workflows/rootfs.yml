@@ -12,13 +12,17 @@ on:
     paths:
       - "rootfs/Dockerfile"
 
+concurrency:
+  group: build-runtime-packs
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
   packs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -100,24 +104,27 @@ jobs:
           fi
           ls -l rootfs/natives
 
-      - name: Build core and office rootfs
+      - name: Build core, tools and office rootfs
         run: |
           set -euo pipefail
           docker buildx build --platform linux/arm64 --target core -f rootfs/Dockerfile --output type=tar,dest=out/core.tar rootfs
+          docker buildx build --platform linux/arm64 --target tools -f rootfs/Dockerfile --output type=tar,dest=out/tools-full.tar rootfs
           docker buildx build --platform linux/arm64 --target office -f rootfs/Dockerfile --output type=tar,dest=out/office-full.tar rootfs
-          python3 scripts/make_delta.py out/core.tar out/office-full.tar out/office.tar
-          rm -f out/office-full.tar
+          python3 scripts/make_delta2.py out/core.tar out/tools-full.tar out/tools.tar
+          python3 scripts/make_delta2.py out/tools-full.tar out/office-full.tar out/office.tar
+          rm -f out/tools-full.tar out/office-full.tar
           ls -l out
 
       - name: Compress packs (xz)
         run: |
           set -euo pipefail
           xz -T0 -9 -k out/core.tar
+          xz -T0 -9 -k out/tools.tar
           xz -T0 -9 -k out/office.tar
           ls -l out
 
       - name: Size report and manifest
-        run: python3 scripts/pack_report.py out "$STIRLING_TAG" core office
+        run: python3 scripts/pack_manifest.py out "$STIRLING_TAG" core tools office
 
       - name: Publish release assets
         env:
@@ -126,4 +133,4 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "Runtime packs $RELEASE_TAG" --notes "Runtime packs for LocalPDF"
-          gh release upload "$RELEASE_TAG" out/core.tar.xz out/office.tar.xz out/stirling-server.jar out/manifest.json --clobber
+          gh release upload "$RELEASE_TAG" out/core.tar.xz out/tools.tar.xz out/office.tar.xz out/stirling-server.jar out/manifest.json --clobber
