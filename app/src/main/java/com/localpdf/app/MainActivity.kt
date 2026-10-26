@@ -1,11 +1,15 @@
 package com.localpdf.app
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,12 +43,19 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
+
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         Lang.init(applicationContext)
+        askForNotificationPermission()
         setContent {
             MaterialTheme {
                 val dir = if (Lang.arabic) LayoutDirection.Rtl else LayoutDirection.Ltr
@@ -52,6 +63,27 @@ class MainActivity : ComponentActivity() {
                     AppRoot()
                 }
             }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        BackgroundWork.appVisible = true
+    }
+
+    override fun onStop() {
+        BackgroundWork.appVisible = false
+        super.onStop()
+    }
+
+    // Android 13+ asks the user before an app may show notifications.
+    private fun askForNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 }
@@ -62,6 +94,8 @@ class DiagState(private val appCtx: Context) {
     var status by mutableStateOf("")
     var fraction by mutableStateOf(-1f)
     var installed by mutableStateOf(false)
+    var toolsInstalled by mutableStateOf(false)
+    var officeInstalled by mutableStateOf(false)
     var saved by mutableStateOf(0L)
     var serverUp by mutableStateOf(false)
 
@@ -70,7 +104,13 @@ class DiagState(private val appCtx: Context) {
             Diagnostics.securityInfo(appCtx) + "\nNative libs:\n" +
             Diagnostics.nativeLibsInfo(appCtx) + "\n" +
             Diagnostics.rootfsInfo(appCtx)
+        refreshFlags()
+    }
+
+    private fun refreshFlags() {
         installed = Installer.isCoreInstalled(appCtx)
+        toolsInstalled = Installer.isPackInstalled(appCtx, Installer.PACK_TOOLS)
+        officeInstalled = Installer.isPackInstalled(appCtx, Installer.PACK_OFFICE)
         saved = Installer.savedDownloadBytes(appCtx)
         serverUp = StirlingServer.isRunning()
     }
@@ -86,18 +126,47 @@ class DiagState(private val appCtx: Context) {
             report = report + "\n\n--- " + title + " ---\n" + result
             status = ""
             fraction = -1f
-            saved = Installer.savedDownloadBytes(appCtx)
-            serverUp = StirlingServer.isRunning()
+            refreshFlags()
             busy = false
         }.start()
     }
 }
 
-private fun phaseName(label: String): String = when (label) {
-    "core" -> Lang.t("تنزيل النظام", "Downloading system")
-    "jar" -> Lang.t("تنزيل Stirling", "Downloading Stirling")
-    "extract" -> Lang.t("فك الضغط", "Extracting")
-    else -> label
+// Installs an optional pack ("tools" or "office").  Stirling is stopped first because
+// the pack changes files under the running server, and it reads its tools at start-up.
+private fun installPackTask(ctx: Context, d: DiagState, name: String): String {
+    val log = StringBuilder()
+    try {
+        if (StirlingServer.isRunning()) {
+            StirlingServer.stop()
+            synchronized(log) {
+                log.append(
+                    Lang.t("تم إيقاف Stirling قبل التثبيت.", "Stirling was stopped before installing.")
+                ).append('\n')
+            }
+        }
+        Installer.installPack(
+            ctx,
+            name,
+            onProgress = { label, done, total ->
+                d.status = "${Notifier.phaseName(label)}: ${done / MB} / ${total / MB} MB"
+                d.fraction = if (total > 0) done.toFloat() / total else -1f
+            },
+            log = { line -> synchronized(log) { log.append(line).append('\n') } }
+        )
+        log.append("OK\n")
+        log.append(
+            Lang.t(
+                "شغّل Stirling ثم حدّث قائمة الأدوات لتفعيل الأدوات الجديدة.",
+                "Start Stirling and refresh the tools list to enable the new tools."
+            )
+        )
+    } catch (e: PausedException) {
+        log.append(Lang.t("تم الإيقاف المؤقت. التقدم محفوظ.", "Paused. Progress is saved."))
+    } catch (e: Throwable) {
+        log.append("ERROR: ${e.javaClass.simpleName}: ${e.message}")
+    }
+    return synchronized(log) { log.toString() }
 }
 
 @Composable
@@ -163,6 +232,23 @@ fun DiagnosticsScreen(d: DiagState) {
         else -> Lang.t(
             "تثبيت النظام الأساسي (نحو 280 ميغابايت)",
             "Install the core system (about 280 MB)"
+        )
+    }
+
+    val toolsPackLabel = if (d.toolsInstalled) {
+        Lang.t("إعادة تثبيت حزمة الأدوات", "Reinstall the tools pack")
+    } else {
+        Lang.t(
+            "تثبيت حزمة الأدوات (Python · WeasyPrint · OCR · ImageMagick · poppler)",
+            "Install the tools pack (Python · WeasyPrint · OCR · ImageMagick · poppler)"
+        )
+    }
+    val officePackLabel = if (d.officeInstalled) {
+        Lang.t("إعادة تثبيت حزمة Office", "Reinstall the Office pack")
+    } else {
+        Lang.t(
+            "تثبيت حزمة Office (LibreOffice: Word وExcel وPowerPoint)",
+            "Install the Office pack (LibreOffice: Word, Excel, PowerPoint)"
         )
     }
 
@@ -294,7 +380,7 @@ fun DiagnosticsScreen(d: DiagState) {
                         Installer.installCore(
                             ctx,
                             onProgress = { label, done, total ->
-                                d.status = "${phaseName(label)}: ${done / MB} / ${total / MB} MB"
+                                d.status = "${Notifier.phaseName(label)}: ${done / MB} / ${total / MB} MB"
                                 d.fraction = if (total > 0) done.toFloat() / total else -1f
                             },
                             log = { line -> synchronized(log) { log.append(line).append('\n') } }
@@ -311,6 +397,43 @@ fun DiagnosticsScreen(d: DiagState) {
             }
         ) {
             Text(installLabel)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedButton(
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !d.busy && d.installed,
+            onClick = {
+                d.runTask(Lang.t("تثبيت حزمة الأدوات", "Tools pack install")) {
+                    installPackTask(ctx, d, Installer.PACK_TOOLS)
+                }
+            }
+        ) {
+            Text(toolsPackLabel)
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedButton(
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !d.busy && d.installed && d.toolsInstalled,
+            onClick = {
+                d.runTask(Lang.t("تثبيت حزمة Office", "Office pack install")) {
+                    installPackTask(ctx, d, Installer.PACK_OFFICE)
+                }
+            }
+        ) {
+            Text(officePackLabel)
+        }
+        if (d.installed && !d.toolsInstalled) {
+            Text(
+                text = Lang.t(
+                    "حزمة Office تتطلب تثبيت حزمة الأدوات أولاً.",
+                    "The Office pack needs the tools pack first."
+                ),
+                fontSize = 12.sp
+            )
         }
 
         if (d.busy) {
