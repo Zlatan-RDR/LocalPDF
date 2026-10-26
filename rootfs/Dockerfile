@@ -26,11 +26,40 @@ RUN mkdir -p /opt/java/openjdk \
 RUN mkdir -p /opt/stirling/natives
 COPY natives/ /opt/stirling/natives/
 
-FROM core AS office
+# ---------------------------------------------------------------------------
+# tools pack: Python (venv with OpenCV, WeasyPrint), poppler (pdftohtml),
+# ImageMagick, OCRmyPDF.  Shipped to the phone as a delta over "core".
+# ---------------------------------------------------------------------------
+FROM core AS tools
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libreoffice-writer libreoffice-calc libreoffice-impress fonts-liberation \
- && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/man /usr/share/info
+      python3 python3-venv \
+      poppler-utils imagemagick ocrmypdf unpaper \
+      libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 libgdk-pixbuf-2.0-0 libcairo2 \
+ && python3 -m venv --system-site-packages /opt/venv \
+ && /opt/venv/bin/pip install --no-cache-dir weasyprint opencv-python-headless numpy pillow fonttools \
+ && ln -s /opt/venv/bin/weasyprint /usr/local/bin/weasyprint \
+ && printf '#!/bin/sh\nexec /opt/venv/bin/python3 "$@"\n' > /usr/local/bin/python3 \
+ && chmod 755 /usr/local/bin/python3 \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /root/.cache /usr/share/man /usr/share/info
+
+# ---------------------------------------------------------------------------
+# office pack: LibreOffice + unoserver.  Delta over "tools" (install tools first).
+# ---------------------------------------------------------------------------
+FROM tools AS office
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# The python3 wrapper is removed while apt runs so package scripts see the system python.
+RUN rm -f /usr/local/bin/python3 \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libreoffice-writer libreoffice-calc libreoffice-impress python3-uno fonts-liberation \
+ && /opt/venv/bin/pip install --no-cache-dir unoserver \
+ && ln -s /opt/venv/bin/unoconvert /usr/local/bin/unoconvert \
+ && printf '#!/bin/sh\nexec /opt/venv/bin/python3 "$@"\n' > /usr/local/bin/python3 \
+ && chmod 755 /usr/local/bin/python3 \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /root/.cache /usr/share/man /usr/share/info
