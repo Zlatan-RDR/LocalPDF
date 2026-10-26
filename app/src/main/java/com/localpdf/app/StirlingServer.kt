@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
@@ -42,11 +43,51 @@ exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-acc
 
     fun isRunning(): Boolean = process?.isAlive == true
 
+    // proot only forwards the kill to its own process: the Java server it started can
+    // survive as an orphan and keep port 8080.  Every process of this app whose command
+    // line mentions the Stirling jar (proot itself and the Java server) is killed here.
+    private fun killStrays() {
+        try {
+            val me = android.os.Process.myPid()
+            val dirs = File("/proc").listFiles() ?: return
+            for (d in dirs) {
+                val pid = d.name.toIntOrNull() ?: continue
+                if (pid == me) continue
+                val cmd = try {
+                    FileInputStream(File(d, "cmdline")).use { it.readBytes() }
+                        .toString(Charsets.ISO_8859_1)
+                } catch (e: Throwable) {
+                    continue
+                }
+                if (cmd.contains("Stirling-PDF.jar")) {
+                    android.os.Process.killProcess(pid)
+                }
+            }
+        } catch (e: Throwable) {
+            // best effort
+        }
+    }
+
+    // Waits (up to maxMs) until nothing answers on the server port any more.
+    private fun waitPortFree(maxMs: Long) {
+        val t0 = System.currentTimeMillis()
+        while (System.currentTimeMillis() - t0 < maxMs) {
+            try {
+                httpGet("/", 300, 300)
+            } catch (e: Throwable) {
+                return
+            }
+            Thread.sleep(200)
+        }
+    }
+
     @Synchronized
     fun start(ctx: Context): String {
         if (isRunning()) return "Server process is already running"
         if (!Installer.isCoreInstalled(ctx)) return "Core is not installed"
         appCtx = ctx.applicationContext
+        killStrays()
+        waitPortFree(4000L)
         val log = logFile(ctx)
         log.delete()
         process = ProotRunner.startGuest(ctx, START_SCRIPT, log)
@@ -56,14 +97,18 @@ exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-acc
 
     @Synchronized
     fun stop() {
-        val p = process ?: return
-        p.destroy()
-        try {
-            if (!p.waitFor(5, TimeUnit.SECONDS)) p.destroyForcibly()
-        } catch (e: Throwable) {
-            p.destroyForcibly()
+        val p = process
+        if (p != null) {
+            p.destroy()
+            try {
+                if (!p.waitFor(5, TimeUnit.SECONDS)) p.destroyForcibly()
+            } catch (e: Throwable) {
+                p.destroyForcibly()
+            }
         }
         process = null
+        killStrays()
+        waitPortFree(4000L)
         val c = appCtx
         if (c != null) BackgroundWork.refreshService(c)
     }
