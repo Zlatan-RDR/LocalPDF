@@ -19,12 +19,17 @@ object StirlingServer {
     @Volatile
     private var process: Process? = null
 
-    // If /opt/stirling/natives contains at least one .jar (for example the
-    // jpdfium-natives-linux-arm64 jar), the server is started through Spring Boot's
-    // PropertiesLauncher with loader.path so those jars join the classpath.
-    // Otherwise the original "java -jar" command is used.
+    @Volatile
+    private var appCtx: Context? = null
+
+    // PATH puts /usr/local/bin first: that is where the java, python3, weasyprint and
+    // unoconvert launchers of the packs live.  If /opt/stirling/natives contains at
+    // least one .jar (jpdfium-natives-linux-arm64), the server is started through Spring
+    // Boot's PropertiesLauncher with loader.path so those jars join the classpath.
     private val START_SCRIPT = """
 cd /data
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export HOME=/root
 export DISABLE_ADDITIONAL_FEATURES=true
 export LD_PRELOAD=/native/libmpshim.so
 if ls /opt/stirling/natives/*.jar >/dev/null 2>&1; then
@@ -41,9 +46,11 @@ exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-acc
     fun start(ctx: Context): String {
         if (isRunning()) return "Server process is already running"
         if (!Installer.isCoreInstalled(ctx)) return "Core is not installed"
+        appCtx = ctx.applicationContext
         val log = logFile(ctx)
         log.delete()
         process = ProotRunner.startGuest(ctx, START_SCRIPT, log)
+        BackgroundWork.refreshService(ctx)
         return "Server process started"
     }
 
@@ -57,6 +64,8 @@ exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-acc
             p.destroyForcibly()
         }
         process = null
+        val c = appCtx
+        if (c != null) BackgroundWork.refreshService(c)
     }
 
     fun exitInfo(): String {
