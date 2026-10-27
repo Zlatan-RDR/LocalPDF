@@ -24,6 +24,19 @@ echo "== files =="
 ls -l /opt/stirling 2>&1
 echo "== java =="
 LD_PRELOAD=/native/libmpshim.so java -version 2>&1
+echo "== proc check =="
+ls -ld /proc /proc/self /proc/cpuinfo 2>&1
+test -f /proc/cpuinfo && echo "cpuinfo: file ok" || echo "cpuinfo: NOT a regular file"
+test -e /proc/self/exe && echo "self/exe: ok" || echo "self/exe: missing"
+test -r /proc/self/maps && echo "self/maps: readable" || echo "self/maps: not readable"
+echo "== libreoffice files =="
+ls -l /usr/lib/libreoffice/program/soffice /usr/lib/libreoffice/program/oosplash /usr/lib/libreoffice/program/soffice.bin 2>&1
+echo "== libreoffice proc lines in soffice script =="
+grep -n "proc" /usr/lib/libreoffice/program/soffice 2>&1 | head -n 8
+echo "== files that contain the not-mounted text =="
+grep -l -a "not mounted" /usr/lib/libreoffice/program/* 2>/dev/null | head -n 5
+echo "== soffice version (40 s limit) =="
+timeout 40 soffice --headless --norestore -env:UserInstallation=file:///tmp/lo_diag --version 2>&1 | head -n 12
 """
 
     private const val JAVA_DIAG_SCRIPT = """
