@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
@@ -20,8 +21,14 @@ static char filebuf[1 << 19];
 static int diag_done = 0;
 static int isolate_logs = 0;
 static int exec_ok_logs = 0;
+/* Silent by default: any text on stderr would end up inside the output of
+ * every program run under this preload (for example "tesseract --version"),
+ * which breaks tools that parse version output. Set LOCALPDF_SHIM_DEBUG=1
+ * in the environment to get the diagnostic lines back. */
+static int debug_on = 0;
 
 static void outf(const char *fmt, ...) {
+    if (!debug_on) return;
     char buf[600];
     va_list ap;
     va_start(ap, fmt);
@@ -104,6 +111,8 @@ static void diagnose(void *addr, size_t len) {
 
 __attribute__((constructor))
 static void shim_loaded(void) {
+    const char *d = getenv("LOCALPDF_SHIM_DEBUG");
+    debug_on = (d != NULL && d[0] != '\0' && d[0] != '0') ? 1 : 0;
     outf("[shim] loaded in pid %d, PR_GET_MDWE=%ld\n", (int)getpid(),
          (long)syscall(SYS_prctl, PR_GET_MDWE, 0L, 0L, 0L, 0L));
 }
@@ -154,7 +163,7 @@ int mprotect(void *addr, size_t len, int prot) {
         }
         if (r != 0 && (prot & PROT_EXEC) && !diag_done) {
             diag_done = 1;
-            diagnose(addr, len);
+            if (debug_on) diagnose(addr, len);
         }
     }
     errno = e;
