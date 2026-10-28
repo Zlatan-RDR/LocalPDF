@@ -24,33 +24,65 @@ echo "== files =="
 ls -l /opt/stirling 2>&1
 echo "== java =="
 LD_PRELOAD=/native/libmpshim.so java -version 2>&1
-echo "== proc paths used by oosplash =="
-grep -a -o -E "/proc[A-Za-z0-9_/.-]+" /usr/lib/libreoffice/program/oosplash | sort -u | head -n 15
-echo "== which of them exist here =="
-grep -a -o -E "/proc[A-Za-z0-9_/.-]+" /usr/lib/libreoffice/program/oosplash | sort -u | head -n 15 | xargs -I X sh -c 'test -e X && echo "exists X" || echo "MISSING X"'
-echo "== self exe link =="
-readlink /proc/self/exe 2>&1
-echo "== soffice.bin direct convert test (60 s limit) =="
-echo hello > /tmp/lo_t.txt
-timeout 60 /usr/lib/libreoffice/program/soffice.bin --headless --norestore -env:UserInstallation=file:///tmp/lo_diag2 --convert-to pdf --outdir /tmp /tmp/lo_t.txt 2>&1 | head -n 12
-ls -l /tmp/lo_t.pdf 2>&1
+echo "== proc version =="
+ls -l /proc/version 2>&1
+head -c 100 /proc/version 2>&1
+echo
+true
 """
 
     private const val JAVA_DIAG_SCRIPT = """
-echo "== shim: java -version =="
+echo "== proc version =="
+ls -l /proc/version 2>&1
+head -c 100 /proc/version 2>&1
+echo
+mkdir -p /tmp/o1 /tmp/o2 /tmp/o3
+rm -rf /tmp/lo_a /tmp/lo_b /tmp/o1/* /tmp/o2/* /tmp/o3/*
+echo hello > /tmp/lo_t.txt
+echo "== office run 1: soffice, fresh profile (200 s limit) =="
+date +%T
+timeout 200 soffice --headless --norestore -env:UserInstallation=file:///tmp/lo_a --convert-to pdf --outdir /tmp/o1 /tmp/lo_t.txt > /tmp/lo_out1.txt 2>&1
+echo "exit code: $?"
+date +%T
+head -n 8 /tmp/lo_out1.txt
+ls -l /tmp/o1 2>&1
+echo "== office run 2: soffice, same profile (200 s limit) =="
+date +%T
+timeout 200 soffice --headless --norestore -env:UserInstallation=file:///tmp/lo_a --convert-to pdf --outdir /tmp/o2 /tmp/lo_t.txt > /tmp/lo_out2.txt 2>&1
+echo "exit code: $?"
+date +%T
+head -n 8 /tmp/lo_out2.txt
+ls -l /tmp/o2 2>&1
+if [ ! -s /tmp/o1/lo_t.pdf ]; then
+echo "== office run 3: soffice.bin direct, fresh profile (150 s limit) =="
+date +%T
+timeout 150 /usr/lib/libreoffice/program/soffice.bin --headless --norestore -env:UserInstallation=file:///tmp/lo_b --convert-to pdf --outdir /tmp/o3 /tmp/lo_t.txt > /tmp/lo_out3.txt 2>&1
+echo "exit code: $?"
+date +%T
+head -n 8 /tmp/lo_out3.txt
+ls -l /tmp/o3 2>&1
+fi
+echo "== java =="
 LD_PRELOAD=/native/libmpshim.so java -version 2>&1
-echo "== musl probe inside the rootfs =="
-/native/libmprobe_musl.so 2>&1
-echo "== limits =="
-ulimit -a 2>&1
-echo "== jvm files =="
-ls -l /usr/lib/jvm/ 2>&1
-ls -l /usr/lib/jvm/default-jvm/lib/server 2>&1 | head -n 8
-echo "== meminfo =="
-head -n 3 /proc/meminfo 2>&1
+true
 """
 
     private fun nativeDir(ctx: Context): String = ctx.applicationInfo.nativeLibraryDir
+
+    // Android hides /proc/version from apps, and LibreOffice's launcher (oosplash)
+    // refuses to start without it ("/proc not mounted"). A small stand-in file is
+    // bound over /proc/version inside the guest.
+    private fun fakeProcVersion(ctx: Context): File {
+        val f = File(ctx.filesDir, "fake_proc_version")
+        try {
+            val text = "Linux version " + (System.getProperty("os.version") ?: "6.6.0") +
+                " (localpdf@localhost) (clang) #1 SMP PREEMPT\n"
+            if (!f.isFile || f.readText() != text) f.writeText(text)
+        } catch (e: Throwable) {
+            // The guest test shows whether the bind worked.
+        }
+        return f
+    }
 
     private fun prepareLibLinks(ctx: Context): File {
         val dir = File(ctx.filesDir, "lib")
@@ -120,6 +152,11 @@ head -n 3 /proc/meminfo 2>&1
             "-b", "/proc",
             "-b", "/sys"
         )
+        val fake = fakeProcVersion(ctx)
+        if (fake.isFile) {
+            cmd.add("-b")
+            cmd.add("${fake.absolutePath}:/proc/version")
+        }
         if (bindNative) {
             cmd.add("-b")
             cmd.add("${nativeDir(ctx)}:/native")
@@ -174,7 +211,7 @@ head -n 3 /proc/meminfo 2>&1
 
     fun javaDiagnostics(ctx: Context): String {
         if (!Installer.isCoreInstalled(ctx)) return "Core is not installed yet"
-        val r = runInGuest(ctx, JAVA_DIAG_SCRIPT, timeoutSec = 120, bindNative = true)
+        val r = runInGuest(ctx, JAVA_DIAG_SCRIPT, timeoutSec = 720, bindNative = true)
         return "exit=${r.exit}\n${r.output}"
     }
 
