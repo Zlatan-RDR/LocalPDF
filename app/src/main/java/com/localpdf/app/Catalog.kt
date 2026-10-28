@@ -30,6 +30,10 @@ object Catalog {
 
     private const val SPEC_NAME = "openapi.json"
 
+    // Tools that take no file (only text fields such as a URL). Every other
+    // tool without a file input is still hidden (info, job and file-store endpoints).
+    private val FILELESS_TOOLS = setOf("url-to-pdf")
+
     fun specFile(ctx: Context): File = File(ctx.filesDir, SPEC_NAME)
 
     fun saveSpec(ctx: Context, text: String) {
@@ -200,9 +204,11 @@ object Catalog {
             val path = keys.next()
             if (path.contains("{")) continue
             val post = paths.optJSONObject(path)?.optJSONObject("post") ?: continue
-            val multipart = post.optJSONObject("requestBody")
-                ?.optJSONObject("content")
-                ?.optJSONObject("multipart/form-data") ?: continue
+            val key = endpointKey(path)
+            val content = post.optJSONObject("requestBody")?.optJSONObject("content")
+            val multipart = content?.optJSONObject("multipart/form-data")
+                ?: (if (key in FILELESS_TOOLS) content?.optJSONObject("application/x-www-form-urlencoded") else null)
+                ?: continue
             val schema = multipart.optJSONObject("schema") ?: continue
 
             val props = LinkedHashMap<String, JSONObject>()
@@ -216,7 +222,7 @@ object Catalog {
                 if (f == null) unsupported.add(name) else fields.add(f)
             }
             val hasFile = fields.any { it.type == FieldType.FILE || it.type == FieldType.FILES }
-            if (!hasFile) continue
+            if (!hasFile && !(key in FILELESS_TOOLS && fields.isNotEmpty())) continue
 
             val segs = path.trim('/').split('/')
             val group = if (segs.size > 2) segs[2] else "other"
@@ -230,7 +236,7 @@ object Catalog {
                     description = desc,
                     fields = fields,
                     unsupportedFields = unsupported,
-                    disabled = disabled.contains(endpointKey(path))
+                    disabled = disabled.contains(key)
                 )
             )
         }
