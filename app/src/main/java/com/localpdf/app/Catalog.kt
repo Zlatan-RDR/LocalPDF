@@ -23,7 +23,8 @@ data class Tool(
     val description: String?,
     val fields: List<ToolField>,
     val unsupportedFields: List<String>,
-    val disabled: Boolean
+    val disabled: Boolean,
+    val formEncoded: Boolean = false
 )
 
 object Catalog {
@@ -206,10 +207,12 @@ object Catalog {
             val post = paths.optJSONObject(path)?.optJSONObject("post") ?: continue
             val key = endpointKey(path)
             val content = post.optJSONObject("requestBody")?.optJSONObject("content")
-            val multipart = content?.optJSONObject("multipart/form-data")
+            val multipartBody = content?.optJSONObject("multipart/form-data")
+            val body = multipartBody
                 ?: (if (key in FILELESS_TOOLS) content?.optJSONObject("application/x-www-form-urlencoded") else null)
                 ?: continue
-            val schema = multipart.optJSONObject("schema") ?: continue
+            val formEncoded = multipartBody == null
+            val schema = body.optJSONObject("schema") ?: continue
 
             val props = LinkedHashMap<String, JSONObject>()
             val required = HashSet<String>()
@@ -236,7 +239,8 @@ object Catalog {
                     description = desc,
                     fields = fields,
                     unsupportedFields = unsupported,
-                    disabled = disabled.contains(key)
+                    disabled = disabled.contains(key),
+                    formEncoded = formEncoded
                 )
             )
         }
