@@ -408,7 +408,8 @@ fun ToolDetail(tool: Tool, onBack: () -> Unit) {
 
     val visibleFields = tool.fields.filter { it.name != "fileId" }
     val fileFields = visibleFields.filter { it.type == FieldType.FILE || it.type == FieldType.FILES }
-    val anyFile = fileFields.any { !files[it.name].isNullOrEmpty() }
+    // A tool without any file field (for example URL to PDF) does not need a file.
+    val anyFile = fileFields.isEmpty() || fileFields.any { !files[it.name].isNullOrEmpty() }
     val missingFile = fileFields.any { it.required && files[it.name].isNullOrEmpty() }
     val missingText = visibleFields.filter {
         it.required &&
