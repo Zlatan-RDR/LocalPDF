@@ -171,6 +171,7 @@ true
                 "TERM=xterm",
                 "TMPDIR=/tmp",
                 "JAVA_HOME=/usr/lib/jvm/default-jvm",
+                "PROCESS_EXECUTOR_AUTO_UNO_SERVER=false",
                 "/bin/sh", "-c", script
             )
         )
