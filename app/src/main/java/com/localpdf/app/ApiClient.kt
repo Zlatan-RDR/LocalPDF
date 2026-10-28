@@ -10,6 +10,7 @@ import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 data class RunResult(
     val ok: Boolean,
@@ -52,6 +53,9 @@ object ApiClient {
         out.write(value.toByteArray(Charsets.UTF_8))
         out.write("\r\n".toByteArray(Charsets.UTF_8))
     }
+
+    private fun formPair(name: String, value: String): String =
+        URLEncoder.encode(name, "UTF-8") + "=" + URLEncoder.encode(value, "UTF-8")
 
     private fun writeFile(ctx: Context, out: OutputStream, boundary: String, name: String, uri: Uri) {
         val fileName = displayName(ctx, uri).replace("\"", "_")
@@ -187,31 +191,53 @@ object ApiClient {
             conn.connectTimeout = 10_000
             conn.readTimeout = 15 * 60 * 1000
             conn.setChunkedStreamingMode(256 * 1024)
-            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            if (tool.formEncoded) {
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            } else {
+                conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            }
             conn.setRequestProperty("Accept", "*/*")
 
             conn.outputStream.use { out ->
-                for (f in tool.fields) {
-                    when (f.type) {
-                        FieldType.FILE, FieldType.FILES -> {
-                            val list = files[f.name].orEmpty()
-                            val chosen = if (f.type == FieldType.FILE) list.take(1) else list
-                            for (u in chosen) writeFile(ctx, out, boundary, f.name, u)
-                        }
-                        FieldType.LIST -> {
-                            val raw = values[f.name].orEmpty()
-                            raw.split(",")
+                if (tool.formEncoded) {
+                    val pairs = ArrayList<String>()
+                    for (f in tool.fields) {
+                        if (f.type == FieldType.FILE || f.type == FieldType.FILES) continue
+                        if (f.type == FieldType.LIST) {
+                            values[f.name].orEmpty()
+                                .split(",")
                                 .map { it.trim() }
                                 .filter { it.isNotEmpty() }
-                                .forEach { writeText(out, boundary, f.name, it) }
-                        }
-                        else -> {
+                                .forEach { pairs.add(formPair(f.name, it)) }
+                        } else {
                             val v = values[f.name].orEmpty()
-                            if (v.isNotEmpty()) writeText(out, boundary, f.name, v)
+                            if (v.isNotEmpty()) pairs.add(formPair(f.name, v))
                         }
                     }
+                    out.write(pairs.joinToString("&").toByteArray(Charsets.UTF_8))
+                } else {
+                    for (f in tool.fields) {
+                        when (f.type) {
+                            FieldType.FILE, FieldType.FILES -> {
+                                val list = files[f.name].orEmpty()
+                                val chosen = if (f.type == FieldType.FILE) list.take(1) else list
+                                for (u in chosen) writeFile(ctx, out, boundary, f.name, u)
+                            }
+                            FieldType.LIST -> {
+                                val raw = values[f.name].orEmpty()
+                                raw.split(",")
+                                    .map { it.trim() }
+                                    .filter { it.isNotEmpty() }
+                                    .forEach { writeText(out, boundary, f.name, it) }
+                            }
+                            else -> {
+                                val v = values[f.name].orEmpty()
+                                if (v.isNotEmpty()) writeText(out, boundary, f.name, v)
+                            }
+                        }
+                    }
+                    out.write("--$boundary--\r\n".toByteArray(Charsets.UTF_8))
                 }
-                out.write("--$boundary--\r\n".toByteArray(Charsets.UTF_8))
             }
 
             val code = conn.responseCode
