@@ -3,6 +3,7 @@ package com.localpdf.app
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -31,6 +32,17 @@ object ApiClient {
     // Android limits a single path component to 255 bytes; the saved name also
     // gets a timestamp prefix, so we keep a safe margin.
     private const val MAX_NAME_BYTES = 120
+
+    // URL to PDF is done in the app: Stirling's own endpoint for it fails in this
+    // build ("No current ServletRequestAttributes"), so the app downloads the page
+    // and sends the HTML to the working HTML to PDF endpoint.
+    private const val HTML_TO_PDF_PATH = "/api/v1/convert/html/pdf"
+    private const val MAX_PAGE_BYTES = 12 * 1024 * 1024
+    private const val BROWSER_UA =
+        "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/126.0 Mobile Safari/537.36"
+
+    private class FetchedPage(val bytes: ByteArray, val url: URL, val charsetName: String?)
 
     fun displayName(ctx: Context, uri: Uri): String {
         try {
@@ -176,12 +188,152 @@ object ApiClient {
         }
     }
 
+    // Reads the response of a finished request and saves the result file.
+    private fun readResult(ctx: Context, conn: HttpURLConnection, started: Long): RunResult {
+        val code = conn.responseCode
+        val ctype = conn.contentType ?: "application/octet-stream"
+        if (code >= 400) {
+            val stream = conn.errorStream ?: conn.inputStream
+            val body = stream?.use { readLimited(it, 4000) } ?: ""
+            return RunResult(
+                false, code, "HTTP $code: $body", null, "", ctype, 0,
+                System.currentTimeMillis() - started
+            )
+        }
+
+        val name = cleanResultName(
+            fileNameFromHeader(conn.getHeaderField("Content-Disposition"), ctype)
+        )
+        val dir = File(ctx.filesDir, "results")
+        dir.mkdirs()
+        val outFile = File(dir, "${System.currentTimeMillis()}_$name")
+        conn.inputStream.use { input ->
+            outFile.outputStream().use { o -> input.copyTo(o, 256 * 1024) }
+        }
+        return RunResult(
+            true, code, "OK", outFile, name,
+            ctype.substringBefore(';').trim(), outFile.length(),
+            System.currentTimeMillis() - started
+        )
+    }
+
+    private fun readAllLimited(input: InputStream, max: Int): ByteArray {
+        val bos = ByteArrayOutputStream()
+        val buf = ByteArray(64 * 1024)
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            if (bos.size() + n > max) {
+                throw IOException("The page is larger than " + (max / 1024 / 1024) + " MB")
+            }
+            bos.write(buf, 0, n)
+        }
+        return bos.toByteArray()
+    }
+
+    // Downloads a web page, following redirects by hand (also from http to https).
+    private fun fetchPage(start: URL): FetchedPage {
+        var current = start
+        var redirects = 0
+        while (true) {
+            val c = current.openConnection() as HttpURLConnection
+            try {
+                c.instanceFollowRedirects = false
+                c.connectTimeout = 15_000
+                c.readTimeout = 30_000
+                c.setRequestProperty("User-Agent", BROWSER_UA)
+                c.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+                c.setRequestProperty("Accept-Language", "ar,en;q=0.8")
+                val code = c.responseCode
+                val location = c.getHeaderField("Location")
+                if (code in 300..399 && location != null) {
+                    redirects++
+                    if (redirects > 8) throw IOException("Too many redirects")
+                    val next = URL(current, location)
+                    if (next.protocol != "http" && next.protocol != "https") {
+                        throw IOException("Unsupported redirect to " + next.protocol)
+                    }
+                    current = next
+                } else {
+                    if (code >= 400) throw IOException("HTTP $code from the website")
+                    val ctype = c.contentType ?: ""
+                    val cs = Regex("charset=\"?([A-Za-z0-9_.:-]+)\"?", RegexOption.IGNORE_CASE)
+                        .find(ctype)?.groupValues?.get(1)
+                    val bytes = c.inputStream.use { readAllLimited(it, MAX_PAGE_BYTES) }
+                    return FetchedPage(bytes, current, cs)
+                }
+            } finally {
+                c.disconnect()
+            }
+        }
+    }
+
+    private fun runUrlToPdf(ctx: Context, values: Map<String, String>): RunResult {
+        val started = System.currentTimeMillis()
+        fun fail(code: Int, msg: String): RunResult =
+            RunResult(false, code, msg, null, "", "", 0, System.currentTimeMillis() - started)
+
+        var raw = values["urlInput"].orEmpty().trim()
+        if (raw.isEmpty()) return fail(-1, "The link is empty")
+        if (!raw.contains("://")) raw = "https://" + raw
+        val start = try {
+            URL(raw)
+        } catch (e: Throwable) {
+            return fail(-1, "Invalid link: " + raw)
+        }
+        if (start.protocol != "http" && start.protocol != "https") {
+            return fail(-1, "Only http and https links are supported")
+        }
+        val page = try {
+            fetchPage(start)
+        } catch (e: IOException) {
+            return fail(-1, "Could not fetch the page: " + e.message)
+        }
+        val text = try {
+            String(page.bytes, charset(page.charsetName ?: "UTF-8"))
+        } catch (e: Throwable) {
+            String(page.bytes, Charsets.UTF_8)
+        }
+        val html = text.toByteArray(Charsets.UTF_8)
+        val host = page.url.host
+        val fileName = safeName(if (host.isNullOrBlank()) "page" else host) + ".html"
+        val boundary = "----LocalPDF" + System.currentTimeMillis()
+        val conn = URL(BASE + HTML_TO_PDF_PATH).openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 15 * 60 * 1000
+            conn.setChunkedStreamingMode(256 * 1024)
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            conn.setRequestProperty("Accept", "*/*")
+            conn.outputStream.use { out ->
+                val head = "--$boundary\r\n" +
+                    "Content-Disposition: form-data; name=\"fileInput\"; filename=\"$fileName\"\r\n" +
+                    "Content-Type: text/html\r\n\r\n"
+                out.write(head.toByteArray(Charsets.UTF_8))
+                out.write(html)
+                out.write("\r\n".toByteArray(Charsets.UTF_8))
+                writeText(out, boundary, "zoom", "1")
+                out.write("--$boundary--\r\n".toByteArray(Charsets.UTF_8))
+            }
+            return readResult(ctx, conn, started)
+        } catch (e: IOException) {
+            return fail(-1, "Connection error: ${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     private fun runRequest(
         ctx: Context,
         tool: Tool,
         values: Map<String, String>,
         files: Map<String, List<Uri>>
     ): RunResult {
+        if (tool.path.trimEnd('/').endsWith("/convert/url/pdf")) {
+            return runUrlToPdf(ctx, values)
+        }
         val started = System.currentTimeMillis()
         val boundary = "----LocalPDF" + System.currentTimeMillis()
         val conn = URL(BASE + tool.path).openConnection() as HttpURLConnection
@@ -240,31 +392,7 @@ object ApiClient {
                 }
             }
 
-            val code = conn.responseCode
-            val ctype = conn.contentType ?: "application/octet-stream"
-            if (code >= 400) {
-                val stream = conn.errorStream ?: conn.inputStream
-                val body = stream?.use { readLimited(it, 4000) } ?: ""
-                return RunResult(
-                    false, code, "HTTP $code: $body", null, "", ctype, 0,
-                    System.currentTimeMillis() - started
-                )
-            }
-
-            val name = cleanResultName(
-                fileNameFromHeader(conn.getHeaderField("Content-Disposition"), ctype)
-            )
-            val dir = File(ctx.filesDir, "results")
-            dir.mkdirs()
-            val outFile = File(dir, "${System.currentTimeMillis()}_$name")
-            conn.inputStream.use { input ->
-                outFile.outputStream().use { o -> input.copyTo(o, 256 * 1024) }
-            }
-            return RunResult(
-                true, code, "OK", outFile, name,
-                ctype.substringBefore(';').trim(), outFile.length(),
-                System.currentTimeMillis() - started
-            )
+            return readResult(ctx, conn, started)
         } catch (e: IOException) {
             return RunResult(
                 false, -1, "Connection error: ${e.javaClass.simpleName}: ${e.message}",
