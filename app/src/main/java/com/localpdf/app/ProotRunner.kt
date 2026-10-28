@@ -24,19 +24,16 @@ echo "== files =="
 ls -l /opt/stirling 2>&1
 echo "== java =="
 LD_PRELOAD=/native/libmpshim.so java -version 2>&1
-echo "== proc check =="
-ls -ld /proc /proc/self /proc/cpuinfo 2>&1
-test -f /proc/cpuinfo && echo "cpuinfo: file ok" || echo "cpuinfo: NOT a regular file"
-test -e /proc/self/exe && echo "self/exe: ok" || echo "self/exe: missing"
-test -r /proc/self/maps && echo "self/maps: readable" || echo "self/maps: not readable"
-echo "== libreoffice files =="
-ls -l /usr/lib/libreoffice/program/soffice /usr/lib/libreoffice/program/oosplash /usr/lib/libreoffice/program/soffice.bin 2>&1
-echo "== libreoffice proc lines in soffice script =="
-grep -n "proc" /usr/lib/libreoffice/program/soffice 2>&1 | head -n 8
-echo "== files that contain the not-mounted text =="
-grep -l -a "not mounted" /usr/lib/libreoffice/program/* 2>/dev/null | head -n 5
-echo "== soffice version (40 s limit) =="
-timeout 40 soffice --headless --norestore -env:UserInstallation=file:///tmp/lo_diag --version 2>&1 | head -n 12
+echo "== proc paths used by oosplash =="
+grep -a -o -E "/proc[A-Za-z0-9_/.-]+" /usr/lib/libreoffice/program/oosplash | sort -u | head -n 15
+echo "== which of them exist here =="
+grep -a -o -E "/proc[A-Za-z0-9_/.-]+" /usr/lib/libreoffice/program/oosplash | sort -u | head -n 15 | xargs -I X sh -c 'test -e X && echo "exists X" || echo "MISSING X"'
+echo "== self exe link =="
+readlink /proc/self/exe 2>&1
+echo "== soffice.bin direct convert test (60 s limit) =="
+echo hello > /tmp/lo_t.txt
+timeout 60 /usr/lib/libreoffice/program/soffice.bin --headless --norestore -env:UserInstallation=file:///tmp/lo_diag2 --convert-to pdf --outdir /tmp /tmp/lo_t.txt 2>&1 | head -n 12
+ls -l /tmp/lo_t.pdf 2>&1
 """
 
     private const val JAVA_DIAG_SCRIPT = """
@@ -168,9 +165,9 @@ head -n 3 /proc/meminfo 2>&1
 
     fun guestTest(ctx: Context): String {
         if (!Installer.isCoreInstalled(ctx)) return "Core is not installed yet"
-        val first = runInGuest(ctx, TEST_SCRIPT, bindNative = true)
+        val first = runInGuest(ctx, TEST_SCRIPT, timeoutSec = 150, bindNative = true)
         if (first.exit == 0) return "exit=0\n${first.output}"
-        val second = runInGuest(ctx, TEST_SCRIPT, noSeccomp = true, bindNative = true)
+        val second = runInGuest(ctx, TEST_SCRIPT, noSeccomp = true, timeoutSec = 150, bindNative = true)
         return "attempt 1 (default): exit=${first.exit}\n${first.output}\n" +
             "attempt 2 (PROOT_NO_SECCOMP=1): exit=${second.exit}\n${second.output}"
     }
