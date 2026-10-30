@@ -35,6 +35,10 @@ object Catalog {
     // tool without a file input is still hidden (info, job and file-store endpoints).
     private val FILELESS_TOOLS = setOf("url-to-pdf")
 
+    // Tools found not to work on the phone. Add the endpoint key (the last part of the
+    // API path, or "from-to-to" for conversions) to hide a tool from the list.
+    private val HIDDEN_TOOLS = setOf<String>()
+
     fun specFile(ctx: Context): File = File(ctx.filesDir, SPEC_NAME)
 
     fun saveSpec(ctx: Context, text: String) {
@@ -206,6 +210,9 @@ object Catalog {
             if (path.contains("{")) continue
             val post = paths.optJSONObject(path)?.optJSONObject("post") ?: continue
             val key = endpointKey(path)
+            // Tools the server reports as disabled (missing program or model) and tools
+            // found not to work are not listed at all, so only tools that can run are shown.
+            if (disabled.contains(key) || key in HIDDEN_TOOLS) continue
             val content = post.optJSONObject("requestBody")?.optJSONObject("content")
             val multipartBody = content?.optJSONObject("multipart/form-data")
             val body = multipartBody
