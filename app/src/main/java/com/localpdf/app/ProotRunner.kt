@@ -12,10 +12,29 @@ object ProotRunner {
     private const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
     // A LibreOffice worker for Stirling, started in the background shortly after the
-    // server (documented setup for installs without Docker). Without it Stirling waits
-    // about a minute for a worker that never comes before it falls back to soffice.
+    // server (documented setup for installs without Docker). Without it the unoconvert
+    // client retries for about 40 seconds before Stirling falls back to soffice.
+    // The "unoserver" command is not on the PATH in this rootfs, so the virtualenv
+    // copy is used; the variants are tried in order until one stays running.
     private const val UNO_WORKER_START =
-        "( sleep 40; exec unoserver --port 2003 --uno-port 2103 ) > /tmp/unoserver.log 2>&1 &\n"
+        "( sleep 40; " +
+            "/opt/venv/bin/unoserver --port 2003 --uno-port 2103 || " +
+            "/opt/venv/bin/python3 -m unoserver.server --port 2003 --uno-port 2103 || " +
+            "/opt/venv/bin/python3 -m unoserver.server --executable soffice --port 2003 --uno-port 2103 " +
+            ") > /tmp/unoserver.log 2>&1 &\n"
+
+    // Replaces /usr/local/bin/unoconvert inside the guest. The real client waits about
+    // 40 seconds for a worker that is not there before giving up, which made every
+    // Office conversion take a minute. This wrapper uses the real client only when the
+    // worker is listening and otherwise fails at once, so Stirling goes straight to its
+    // direct soffice fallback.
+    private val UNOCONVERT_STUB = """#!/bin/sh
+if /opt/venv/bin/python3 -c "import socket; s = socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 2003))" 2>/dev/null; then
+  exec /opt/venv/bin/python3 -c "import sys; from unoserver.client import converter_main; sys.exit(converter_main())" "${'$'}@"
+fi
+echo "LibreOffice worker is not running" >&2
+exit 1
+"""
 
     private const val TEST_SCRIPT = """
 echo "== uname =="
@@ -40,29 +59,42 @@ true
     private const val JAVA_DIAG_SCRIPT = """
 echo "== proc version =="
 ls -l /proc/version 2>&1
-head -c 100 /proc/version 2>&1
-echo
+echo "== uno files =="
+ls -l /opt/venv/bin 2>&1 | grep -i uno
+ls -l /usr/local/bin 2>&1 | grep -i uno
+ls -l /usr/bin/libreoffice /usr/bin/soffice 2>&1
+echo "== uno import in venv python =="
+/opt/venv/bin/python3 -c "import uno; print('uno import ok')" 2>&1 | tail -n 2
 echo hello > /tmp/lo_t.txt
-rm -f /tmp/uno_out.pdf /tmp/uno_out2.pdf
-echo "== unoserver worker test (ports 2013 and 2113) =="
-(unoserver --port 2013 --uno-port 2113 > /tmp/unoserver_t.log 2>&1 &)
+rm -f /tmp/w1.pdf /tmp/w2.pdf /tmp/w3.pdf
+echo "== start three worker variants =="
 date +%T
-sleep 25
+(/opt/venv/bin/unoserver --port 2013 --uno-port 2113 > /tmp/w1.log 2>&1 &)
+(/opt/venv/bin/python3 -m unoserver.server --port 2014 --uno-port 2114 > /tmp/w2.log 2>&1 &)
+(/opt/venv/bin/python3 -m unoserver.server --executable soffice --port 2015 --uno-port 2115 > /tmp/w3.log 2>&1 &)
+sleep 45
 date +%T
-echo "== unoconvert run 1 =="
-timeout 120 unoconvert --port 2013 --convert-to pdf /tmp/lo_t.txt /tmp/uno_out.pdf > /tmp/uno_c.txt 2>&1
+echo "== conversion through worker 1 (port 2013) =="
+timeout 100 /opt/venv/bin/python3 -c "import sys; from unoserver.client import converter_main; sys.argv = ['unoconvert', '--port', '2013', '--convert-to', 'pdf', '/tmp/lo_t.txt', '/tmp/w1.pdf']; sys.exit(converter_main())" > /tmp/c1.txt 2>&1
 echo "exit code: $?"
 date +%T
-head -n 5 /tmp/uno_c.txt
-ls -l /tmp/uno_out.pdf 2>&1
-echo "== unoconvert run 2 =="
-timeout 120 unoconvert --port 2013 --convert-to pdf /tmp/lo_t.txt /tmp/uno_out2.pdf > /tmp/uno_c2.txt 2>&1
+ls -l /tmp/w1.pdf 2>&1
+echo "== worker 1 log =="
+tail -n 6 /tmp/w1.log
+echo "== conversion through worker 2 (port 2014) =="
+timeout 100 /opt/venv/bin/python3 -c "import sys; from unoserver.client import converter_main; sys.argv = ['unoconvert', '--port', '2014', '--convert-to', 'pdf', '/tmp/lo_t.txt', '/tmp/w2.pdf']; sys.exit(converter_main())" > /tmp/c2.txt 2>&1
 echo "exit code: $?"
 date +%T
-head -n 5 /tmp/uno_c2.txt
-ls -l /tmp/uno_out2.pdf 2>&1
-echo "== unoserver log =="
-tail -n 10 /tmp/unoserver_t.log
+ls -l /tmp/w2.pdf 2>&1
+echo "== worker 2 log =="
+tail -n 6 /tmp/w2.log
+echo "== conversion through worker 3 (port 2015) =="
+timeout 100 /opt/venv/bin/python3 -c "import sys; from unoserver.client import converter_main; sys.argv = ['unoconvert', '--port', '2015', '--convert-to', 'pdf', '/tmp/lo_t.txt', '/tmp/w3.pdf']; sys.exit(converter_main())" > /tmp/c3.txt 2>&1
+echo "exit code: $?"
+date +%T
+ls -l /tmp/w3.pdf 2>&1
+echo "== worker 3 log =="
+tail -n 6 /tmp/w3.log
 true
 """
 
@@ -79,6 +111,17 @@ true
             if (!f.isFile || f.readText() != text) f.writeText(text)
         } catch (e: Throwable) {
             // The guest test shows whether the bind worked.
+        }
+        return f
+    }
+
+    private fun unoconvertStub(ctx: Context): File {
+        val f = File(ctx.filesDir, "unoconvert_stub.sh")
+        try {
+            if (!f.isFile || f.readText() != UNOCONVERT_STUB) f.writeText(UNOCONVERT_STUB)
+            f.setExecutable(true, false)
+        } catch (e: Throwable) {
+            // Without the wrapper the real unoconvert is used (slower, still works).
         }
         return f
     }
@@ -155,6 +198,11 @@ true
         if (fake.isFile) {
             cmd.add("-b")
             cmd.add("${fake.absolutePath}:/proc/version")
+        }
+        val stub = unoconvertStub(ctx)
+        if (stub.isFile && stub.canExecute()) {
+            cmd.add("-b")
+            cmd.add("${stub.absolutePath}:/usr/local/bin/unoconvert")
         }
         if (bindNative) {
             cmd.add("-b")
