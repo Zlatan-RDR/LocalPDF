@@ -11,6 +11,12 @@ object ProotRunner {
 
     private const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+    // A LibreOffice worker for Stirling, started in the background shortly after the
+    // server (documented setup for installs without Docker). Without it Stirling waits
+    // about a minute for a worker that never comes before it falls back to soffice.
+    private const val UNO_WORKER_START =
+        "( sleep 40; exec unoserver --port 2003 --uno-port 2103 ) > /tmp/unoserver.log 2>&1 &\n"
+
     private const val TEST_SCRIPT = """
 echo "== uname =="
 uname -a
@@ -36,34 +42,27 @@ echo "== proc version =="
 ls -l /proc/version 2>&1
 head -c 100 /proc/version 2>&1
 echo
-mkdir -p /tmp/o1 /tmp/o2 /tmp/o3
-rm -rf /tmp/lo_a /tmp/lo_b /tmp/o1/* /tmp/o2/* /tmp/o3/*
 echo hello > /tmp/lo_t.txt
-echo "== office run 1: soffice, fresh profile (200 s limit) =="
+rm -f /tmp/uno_out.pdf /tmp/uno_out2.pdf
+echo "== unoserver worker test (ports 2013 and 2113) =="
+(unoserver --port 2013 --uno-port 2113 > /tmp/unoserver_t.log 2>&1 &)
 date +%T
-timeout 200 soffice --headless --norestore -env:UserInstallation=file:///tmp/lo_a --convert-to pdf --outdir /tmp/o1 /tmp/lo_t.txt > /tmp/lo_out1.txt 2>&1
+sleep 25
+date +%T
+echo "== unoconvert run 1 =="
+timeout 120 unoconvert --port 2013 --convert-to pdf /tmp/lo_t.txt /tmp/uno_out.pdf > /tmp/uno_c.txt 2>&1
 echo "exit code: $?"
 date +%T
-head -n 8 /tmp/lo_out1.txt
-ls -l /tmp/o1 2>&1
-echo "== office run 2: soffice, same profile (200 s limit) =="
-date +%T
-timeout 200 soffice --headless --norestore -env:UserInstallation=file:///tmp/lo_a --convert-to pdf --outdir /tmp/o2 /tmp/lo_t.txt > /tmp/lo_out2.txt 2>&1
+head -n 5 /tmp/uno_c.txt
+ls -l /tmp/uno_out.pdf 2>&1
+echo "== unoconvert run 2 =="
+timeout 120 unoconvert --port 2013 --convert-to pdf /tmp/lo_t.txt /tmp/uno_out2.pdf > /tmp/uno_c2.txt 2>&1
 echo "exit code: $?"
 date +%T
-head -n 8 /tmp/lo_out2.txt
-ls -l /tmp/o2 2>&1
-if [ ! -s /tmp/o1/lo_t.pdf ]; then
-echo "== office run 3: soffice.bin direct, fresh profile (150 s limit) =="
-date +%T
-timeout 150 /usr/lib/libreoffice/program/soffice.bin --headless --norestore -env:UserInstallation=file:///tmp/lo_b --convert-to pdf --outdir /tmp/o3 /tmp/lo_t.txt > /tmp/lo_out3.txt 2>&1
-echo "exit code: $?"
-date +%T
-head -n 8 /tmp/lo_out3.txt
-ls -l /tmp/o3 2>&1
-fi
-echo "== java =="
-LD_PRELOAD=/native/libmpshim.so java -version 2>&1
+head -n 5 /tmp/uno_c2.txt
+ls -l /tmp/uno_out2.pdf 2>&1
+echo "== unoserver log =="
+tail -n 10 /tmp/unoserver_t.log
 true
 """
 
@@ -194,7 +193,7 @@ true
     }
 
     fun startGuest(ctx: Context, script: String, logFile: File): Process {
-        val pb = ProcessBuilder(guestCommand(ctx, script, true))
+        val pb = ProcessBuilder(guestCommand(ctx, UNO_WORKER_START + script, true))
         pb.redirectErrorStream(true)
         pb.redirectOutput(ProcessBuilder.Redirect.to(logFile))
         applyEnv(ctx, pb.environment(), false)
