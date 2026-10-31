@@ -23,13 +23,29 @@ object StirlingServer {
     @Volatile
     private var appCtx: Context? = null
 
+    // Java heap limit: a quarter of the phone's RAM, between 1 GB and 3 GB (a fixed
+    // 1.5 GB ran out of memory when converting a 92 MB scanned PDF to images).
+    private fun heapMb(ctx: Context): Int {
+        return try {
+            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val mi = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            val totalMb = (mi.totalMem / (1024L * 1024L)).toInt()
+            (totalMb / 4).coerceIn(1024, 3072)
+        } catch (e: Throwable) {
+            1536
+        }
+    }
+
     // PATH puts /usr/local/bin first: that is where the java, python3, weasyprint and
     // unoconvert launchers of the packs live.  SYSTEM_ENABLEURLTOPDF turns on the
     // "URL to PDF" tool (off by default in Stirling because the server fetches web pages);
     // the server only listens on 127.0.0.1.  If /opt/stirling/natives contains at
     // least one .jar (jpdfium-natives-linux-arm64), the server is started through Spring
     // Boot's PropertiesLauncher with loader.path so those jars join the classpath.
-    private val START_SCRIPT = """
+    private fun startScript(ctx: Context): String {
+        val heap = heapMb(ctx)
+        return """
 cd /data
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export HOME=/root
@@ -37,10 +53,11 @@ export DISABLE_ADDITIONAL_FEATURES=true
 export SYSTEM_ENABLEURLTOPDF=true
 export LD_PRELOAD=/native/libmpshim.so
 if ls /opt/stirling/natives/*.jar >/dev/null 2>&1; then
-  exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -Dloader.path=/opt/stirling/natives -cp /opt/stirling/Stirling-PDF.jar org.springframework.boot.loader.launch.PropertiesLauncher --server.port=$PORT --server.address=127.0.0.1
+  exec java -Xmx${heap}m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -Dloader.path=/opt/stirling/natives -cp /opt/stirling/Stirling-PDF.jar org.springframework.boot.loader.launch.PropertiesLauncher --server.port=$PORT --server.address=127.0.0.1
 fi
-exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -jar /opt/stirling/Stirling-PDF.jar --server.port=$PORT --server.address=127.0.0.1
+exec java -Xmx${heap}m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true -Djava.io.tmpdir=/tmp -jar /opt/stirling/Stirling-PDF.jar --server.port=$PORT --server.address=127.0.0.1
 """
+    }
 
     fun logFile(ctx: Context): File = File(ctx.filesDir, "stirling.log")
 
@@ -93,7 +110,7 @@ exec java -Xmx1536m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 --enable-native-acc
         waitPortFree(4000L)
         val log = logFile(ctx)
         log.delete()
-        process = ProotRunner.startGuest(ctx, START_SCRIPT, log)
+        process = ProotRunner.startGuest(ctx, startScript(ctx), log)
         BackgroundWork.refreshService(ctx)
         return "Server process started"
     }
