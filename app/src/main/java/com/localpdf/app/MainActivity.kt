@@ -1,48 +1,35 @@
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+
 package com.localpdf.app
 
 import android.Manifest
-import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
@@ -55,12 +42,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         Lang.init(applicationContext)
-        askForNotificationPermission()
+        AppPrefs.init(applicationContext)
+        AppModel.init(applicationContext)
         setContent {
-            MaterialTheme {
-                val dir = if (Lang.arabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+            val dir = if (Lang.arabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+            AppTheme {
                 CompositionLocalProvider(LocalLayoutDirection provides dir) {
-                    AppRoot()
+                    AppRoot(onRequestNotifications = { askForNotificationPermission() })
                 }
             }
         }
@@ -69,10 +57,12 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         BackgroundWork.appVisible = true
+        AppModel.onForeground(applicationContext)
     }
 
     override fun onStop() {
         BackgroundWork.appVisible = false
+        AppModel.onBackground(applicationContext)
         super.onStop()
     }
 
@@ -88,404 +78,130 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-class DiagState(private val appCtx: Context) {
-    var report by mutableStateOf("")
-    var busy by mutableStateOf(false)
-    var status by mutableStateOf("")
-    var fraction by mutableStateOf(-1f)
-    var installed by mutableStateOf(false)
-    var toolsInstalled by mutableStateOf(false)
-    var officeInstalled by mutableStateOf(false)
-    var saved by mutableStateOf(0L)
-    var serverUp by mutableStateOf(false)
-
-    init {
-        report = Diagnostics.deviceInfo(appCtx) + "\n" +
-            Diagnostics.securityInfo(appCtx) + "\nNative libs:\n" +
-            Diagnostics.nativeLibsInfo(appCtx) + "\n" +
-            Diagnostics.rootfsInfo(appCtx)
-        refreshFlags()
-    }
-
-    private fun refreshFlags() {
-        installed = Installer.isCoreInstalled(appCtx)
-        toolsInstalled = Installer.isPackInstalled(appCtx, Installer.PACK_TOOLS)
-        officeInstalled = Installer.isPackInstalled(appCtx, Installer.PACK_OFFICE)
-        saved = Installer.savedDownloadBytes(appCtx)
-        serverUp = StirlingServer.isRunning()
-    }
-
-    fun runTask(title: String, block: () -> String) {
-        busy = true
-        Thread {
-            val result = try {
-                block()
-            } catch (e: Throwable) {
-                "ERROR: ${e.javaClass.simpleName}: ${e.message}"
-            }
-            report = report + "\n\n--- " + title + " ---\n" + result
-            status = ""
-            fraction = -1f
-            refreshFlags()
-            busy = false
-        }.start()
-    }
-}
-
-// Installs an optional pack ("tools" or "office").  Stirling is stopped first because
-// the pack changes files under the running server, and it reads its tools at start-up.
-private fun installPackTask(ctx: Context, d: DiagState, name: String): String {
-    val log = StringBuilder()
-    try {
-        if (StirlingServer.isRunning()) {
-            StirlingServer.stop()
-            synchronized(log) {
-                log.append(
-                    Lang.t("تم إيقاف Stirling قبل التثبيت.", "Stirling was stopped before installing.")
-                ).append('\n')
-            }
-        }
-        Installer.installPack(
-            ctx,
-            name,
-            onProgress = { label, done, total ->
-                d.status = "${Notifier.phaseName(label)}: ${done / MB} / ${total / MB} MB"
-                d.fraction = if (total > 0) done.toFloat() / total else -1f
-            },
-            log = { line -> synchronized(log) { log.append(line).append('\n') } }
-        )
-        log.append("OK\n")
-        log.append(
-            Lang.t(
-                "شغّل Stirling ثم حدّث قائمة الأدوات لتفعيل الأدوات الجديدة.",
-                "Start Stirling and refresh the tools list to enable the new tools."
-            )
-        )
-    } catch (e: PausedException) {
-        log.append(Lang.t("تم الإيقاف المؤقت. التقدم محفوظ.", "Paused. Progress is saved."))
-    } catch (e: Throwable) {
-        log.append("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-    }
-    return synchronized(log) { log.toString() }
-}
-
 @Composable
-fun AppRoot() {
+fun AppRoot(onRequestNotifications: () -> Unit) {
     val ctx = LocalContext.current
-    val diag = remember { DiagState(ctx.applicationContext) }
-    var tab by remember { mutableStateOf(0) }
+    var tab by rememberSaveable { mutableStateOf(0) }
+    var selectedPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var toolsGroup by rememberSaveable { mutableStateOf<String?>(null) }
+    var toolsQuery by rememberSaveable { mutableStateOf("") }
+    var focusSearch by remember { mutableStateOf(false) }
+    val toolsListState = rememberLazyListState()
 
-    val toolsLabel = Lang.t("الأدوات", "Tools")
-    val diagLabel = Lang.t("التشخيص", "Diagnostics")
+    // The engine starts by itself as soon as the components are installed.
+    LaunchedEffect(AppModel.coreInstalled, AppModel.installing) {
+        if (AppModel.coreInstalled && !AppModel.installing) AppModel.ensureEngine(ctx)
+    }
 
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .safeDrawingPadding()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (tab == 0) {
-                    Button(onClick = { tab = 0 }) { Text(toolsLabel) }
-                } else {
-                    OutlinedButton(onClick = { tab = 0 }) { Text(toolsLabel) }
+    val needsSetup = !AppModel.coreInstalled || AppModel.showSetup
+    if (needsSetup) {
+        SetupScreen(
+            onRequestNotifications = onRequestNotifications,
+            onFinish = { AppModel.showSetup = false }
+        )
+    } else {
+        val selectedTool = AppModel.tools.firstOrNull { it.path == selectedPath }
+        AnimatedContent(
+            targetState = selectedTool,
+            transitionSpec = {
+                (fadeIn(tween(220)) + scaleIn(initialScale = 0.96f, animationSpec = tween(220))) togetherWith
+                    fadeOut(tween(140))
+            },
+            label = "screen"
+        ) { tool ->
+            if (tool != null) {
+                key(tool.path) {
+                    ToolScreen(tool = tool, onBack = { selectedPath = null })
                 }
-                if (tab == 1) {
-                    Button(onClick = { tab = 1 }) { Text(diagLabel) }
-                } else {
-                    OutlinedButton(onClick = { tab = 1 }) { Text(diagLabel) }
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                if (tab == 0) {
-                    ToolsScreen()
-                } else {
-                    DiagnosticsScreen(diag)
-                }
+            } else {
+                MainScaffold(
+                    tab = tab,
+                    onTab = { tab = it },
+                    toolsGroup = toolsGroup,
+                    onToolsGroup = { toolsGroup = it },
+                    toolsQuery = toolsQuery,
+                    onToolsQuery = { toolsQuery = it },
+                    focusSearch = focusSearch,
+                    onSearchFocused = { focusSearch = false },
+                    onOpenSearch = {
+                        tab = 1
+                        focusSearch = true
+                    },
+                    onOpenCategory = { g ->
+                        toolsGroup = g
+                        toolsQuery = ""
+                        tab = 1
+                    },
+                    onOpenTool = { selectedPath = it.path },
+                    toolsListState = toolsListState
+                )
             }
         }
     }
 }
 
 @Composable
-fun DiagnosticsScreen(d: DiagState) {
-    val ctx = LocalContext.current
-    val view = LocalView.current
-
-    SideEffect { view.keepScreenOn = d.busy || d.serverUp }
-
-    val installLabel = when {
-        d.installed -> Lang.t("إعادة تثبيت النظام الأساسي", "Reinstall the core system")
-        d.saved > 0 -> Lang.t(
-            "متابعة التنزيل (${d.saved / MB} ميغابايت محفوظة)",
-            "Resume download (${d.saved / MB} MB saved)"
-        )
-        else -> Lang.t(
-            "تثبيت النظام الأساسي (نحو 280 ميغابايت)",
-            "Install the core system (about 280 MB)"
-        )
-    }
-
-    val toolsPackLabel = if (d.toolsInstalled) {
-        Lang.t("إعادة تثبيت حزمة الأدوات", "Reinstall the tools pack")
-    } else {
-        Lang.t(
-            "تثبيت حزمة الأدوات (Python · WeasyPrint · OCR · ImageMagick · poppler)",
-            "Install the tools pack (Python · WeasyPrint · OCR · ImageMagick · poppler)"
-        )
-    }
-    val officePackLabel = if (d.officeInstalled) {
-        Lang.t("إعادة تثبيت حزمة Office", "Reinstall the Office pack")
-    } else {
-        Lang.t(
-            "تثبيت حزمة Office (LibreOffice: Word وExcel وPowerPoint)",
-            "Install the Office pack (LibreOffice: Word, Excel, PowerPoint)"
-        )
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-    ) {
-        Text(
-            text = if (d.serverUp) {
-                Lang.t("خادم Stirling: يعمل", "Stirling server: running")
-            } else {
-                Lang.t("خادم Stirling: متوقف", "Stirling server: stopped")
-            },
-            fontSize = 14.sp
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Button(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy && d.installed && !d.serverUp,
-            onClick = {
-                d.runTask(Lang.t("تشغيل Stirling", "Start Stirling")) {
-                    val started = StirlingServer.start(ctx)
-                    val t0 = System.currentTimeMillis()
-                    val ready = StirlingServer.waitReady(300) { s ->
-                        d.status = Lang.t("بدء التشغيل... $s ثانية", "Starting... $s s")
-                    }
-                    val secs = (System.currentTimeMillis() - t0) / 1000
-                    buildString {
-                        append(started).append('\n')
-                        if (ready) {
-                            append(Lang.t("الخادم جاهز بعد $secs ثانية", "Server ready after $secs s")).append('\n')
-                        } else {
-                            append(
-                                Lang.t(
-                                    "لم يصبح الخادم جاهزاً (${StirlingServer.exitInfo()}) بعد $secs ثانية",
-                                    "The server did not become ready (${StirlingServer.exitInfo()}) after $secs s"
-                                )
-                            ).append('\n')
-                        }
-                        append(Lang.t("--- آخر السجل ---", "--- Last log lines ---")).append('\n')
-                        append(StirlingServer.tailLog(ctx, 40))
-                    }
-                }
-            }
-        ) {
-            Text(Lang.t("تشغيل Stirling (محلي)", "Start Stirling (local)"))
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy && d.serverUp,
-            onClick = {
-                d.runTask(Lang.t("فحص الخادم وقائمة API", "Server check and API list")) {
-                    StirlingServer.apiSummary(ctx)
-                }
-            }
-        ) {
-            Text(Lang.t("فحص الخادم وقائمة API", "Server check and API list"))
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy,
-            onClick = {
-                d.runTask(Lang.t("سجل Stirling", "Stirling log")) {
-                    "(${StirlingServer.exitInfo()})\n" + StirlingServer.tailLog(ctx, 80)
-                }
-            }
-        ) {
-            Text(Lang.t("عرض سجل Stirling", "Show Stirling log"))
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy && d.serverUp,
-            onClick = {
-                d.runTask(Lang.t("إيقاف Stirling", "Stop Stirling")) {
-                    StirlingServer.stop()
-                    Lang.t("تم الإيقاف", "Stopped")
-                }
-            }
-        ) {
-            Text(Lang.t("إيقاف Stirling", "Stop Stirling"))
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy && d.installed,
-            onClick = {
-                d.runTask(Lang.t("اختبار البيئة", "Environment test")) { ProotRunner.guestTest(ctx) }
-            }
-        ) {
-            Text(Lang.t("اختبار البيئة (java, qpdf, gs, tesseract)", "Environment test (java, qpdf, gs, tesseract)"))
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy && d.installed,
-            onClick = {
-                d.runTask(Lang.t("تشخيص Java (errno + musl)", "Java diagnostics (errno + musl)")) {
-                    ProotRunner.javaDiagnostics(ctx)
-                }
-            }
-        ) {
-            Text(Lang.t("تشخيص Java (errno + musl)", "Java diagnostics (errno + musl)"))
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy,
-            onClick = {
-                d.runTask(Lang.t("تثبيت النظام الأساسي", "Core system install")) {
-                    val log = StringBuilder()
-                    try {
-                        Installer.installCore(
-                            ctx,
-                            onProgress = { label, done, total ->
-                                d.status = "${Notifier.phaseName(label)}: ${done / MB} / ${total / MB} MB"
-                                d.fraction = if (total > 0) done.toFloat() / total else -1f
-                            },
-                            log = { line -> synchronized(log) { log.append(line).append('\n') } }
-                        )
-                        d.installed = Installer.isCoreInstalled(ctx)
-                        log.append("OK")
-                    } catch (e: PausedException) {
-                        log.append(Lang.t("تم الإيقاف المؤقت. التقدم محفوظ.", "Paused. Progress is saved."))
-                    } catch (e: Throwable) {
-                        log.append("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-                    }
-                    log.toString()
-                }
-            }
-        ) {
-            Text(installLabel)
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy && d.installed,
-            onClick = {
-                d.runTask(Lang.t("تثبيت حزمة الأدوات", "Tools pack install")) {
-                    installPackTask(ctx, d, Installer.PACK_TOOLS)
-                }
-            }
-        ) {
-            Text(toolsPackLabel)
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !d.busy && d.installed && d.toolsInstalled,
-            onClick = {
-                d.runTask(Lang.t("تثبيت حزمة Office", "Office pack install")) {
-                    installPackTask(ctx, d, Installer.PACK_OFFICE)
-                }
-            }
-        ) {
-            Text(officePackLabel)
-        }
-        if (d.installed && !d.toolsInstalled) {
-            Text(
-                text = Lang.t(
-                    "حزمة Office تتطلب تثبيت حزمة الأدوات أولاً.",
-                    "The Office pack needs the tools pack first."
-                ),
-                fontSize = 12.sp
-            )
-        }
-
-        if (d.busy) {
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = { Installer.requestPause() }
-            ) {
-                Text(Lang.t("إيقاف مؤقت للتنزيل (يحفظ التقدم)", "Pause download (keeps progress)"))
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            onClick = {
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, d.report)
-                }
-                ctx.startActivity(
-                    Intent.createChooser(send, Lang.t("مشاركة التقرير", "Share report"))
+private fun MainScaffold(
+    tab: Int,
+    onTab: (Int) -> Unit,
+    toolsGroup: String?,
+    onToolsGroup: (String?) -> Unit,
+    toolsQuery: String,
+    onToolsQuery: (String) -> Unit,
+    focusSearch: Boolean,
+    onSearchFocused: () -> Unit,
+    onOpenSearch: () -> Unit,
+    onOpenCategory: (String) -> Unit,
+    onOpenTool: (Tool) -> Unit,
+    toolsListState: androidx.compose.foundation.lazy.LazyListState
+) {
+    BackHandler(enabled = tab != 0) { onTab(0) }
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.surface,
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = tab == 0,
+                    onClick = { onTab(0) },
+                    icon = { Icon(Icons.Default.Home, contentDescription = null) },
+                    label = { Text(Lang.t("الرئيسية", "Home")) }
+                )
+                NavigationBarItem(
+                    selected = tab == 1,
+                    onClick = { onTab(1) },
+                    icon = { Icon(Icons.Default.Build, contentDescription = null) },
+                    label = { Text(Lang.t("الأدوات", "Tools")) }
+                )
+                NavigationBarItem(
+                    selected = tab == 2,
+                    onClick = { onTab(2) },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                    label = { Text(Lang.t("الإعدادات", "Settings")) }
                 )
             }
-        ) {
-            Text(Lang.t("مشاركة التقرير", "Share report"))
         }
-
-        if (d.busy) {
-            Spacer(modifier = Modifier.height(12.dp))
-            if (d.fraction >= 0f) {
-                LinearProgressIndicator(
-                    progress = { d.fraction },
-                    modifier = Modifier.fillMaxWidth()
+    ) { padding ->
+        Crossfade(targetState = tab, label = "tab") { t ->
+            when (t) {
+                0 -> HomeScreen(
+                    padding = padding,
+                    onOpenTool = onOpenTool,
+                    onOpenCategory = onOpenCategory,
+                    onOpenSearch = onOpenSearch
                 )
-            } else {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                1 -> ToolsScreen(
+                    padding = padding,
+                    group = toolsGroup,
+                    onGroupChange = onToolsGroup,
+                    query = toolsQuery,
+                    onQueryChange = onToolsQuery,
+                    focusSearch = focusSearch,
+                    onSearchFocused = onSearchFocused,
+                    listState = toolsListState,
+                    onOpenTool = onOpenTool
+                )
+                else -> SettingsScreen(padding = padding)
             }
-            if (d.status.isNotEmpty()) {
-                Text(text = d.status, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-            Text(
-                text = d.report,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth()
-            )
         }
     }
 }
