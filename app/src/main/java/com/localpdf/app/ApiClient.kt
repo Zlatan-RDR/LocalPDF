@@ -204,9 +204,10 @@ object ApiClient {
         val name = cleanResultName(
             fileNameFromHeader(conn.getHeaderField("Content-Disposition"), ctype)
         )
-        val dir = File(ctx.filesDir, "results")
+        // One folder per result, so the file keeps its clean name when it is shared or opened.
+        val dir = File(ctx.filesDir, "results/" + System.currentTimeMillis())
         dir.mkdirs()
-        val outFile = File(dir, "${System.currentTimeMillis()}_$name")
+        val outFile = File(dir, name)
         conn.inputStream.use { input ->
             outFile.outputStream().use { o -> input.copyTo(o, 256 * 1024) }
         }
