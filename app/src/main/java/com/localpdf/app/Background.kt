@@ -34,7 +34,7 @@ object Notifier {
 
     fun phaseName(label: String): String = when (label) {
         "core" -> Lang.t("تنزيل النظام", "Downloading system")
-        "jar" -> Lang.t("تنزيل Stirling", "Downloading Stirling")
+        "jar" -> Lang.t("تنزيل المحرك", "Downloading the engine")
         "tools" -> Lang.t("تنزيل حزمة الأدوات", "Downloading tools pack")
         "office" -> Lang.t("تنزيل حزمة Office", "Downloading Office pack")
         "extract" -> Lang.t("فك الضغط", "Extracting")
@@ -81,7 +81,7 @@ object Notifier {
         val title = if (busy) {
             s.title
         } else {
-            Lang.t("Stirling يعمل في الخلفية", "Stirling is running in the background")
+            Lang.t("مختبر PDF يعمل في الخلفية", "PDF Lab is running in the background")
         }
         val text = if (busy) {
             s.text
@@ -89,7 +89,7 @@ object Notifier {
             Lang.t("جاهز لمعالجة ملفات PDF", "Ready to process PDF files")
         }
         val b = NotificationCompat.Builder(ctx, CHANNEL_ONGOING)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_stat_notify)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(openAppIntent(ctx))
@@ -122,11 +122,7 @@ object Notifier {
     fun notifyDone(ctx: Context, ok: Boolean, title: String, text: String) {
         try {
             ensureChannels(ctx)
-            val icon = if (ok) {
-                android.R.drawable.stat_sys_download_done
-            } else {
-                android.R.drawable.stat_notify_error
-            }
+            val icon = R.drawable.ic_stat_notify
             val n = NotificationCompat.Builder(ctx, CHANNEL_DONE)
                 .setSmallIcon(icon)
                 .setContentTitle(title)
