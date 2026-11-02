@@ -61,11 +61,14 @@ object AppPrefs {
         dynamicColor = p.getBoolean("dynamic_color", false)
     }
 
+    // @JvmName avoids a clash with the setter that Kotlin generates for the property above.
+    @JvmName("applyThemeMode")
     fun setThemeMode(v: Int) {
         themeMode = v
         prefs?.edit()?.putInt("theme_mode", v)?.apply()
     }
 
+    @JvmName("applyDynamicColor")
     fun setDynamicColor(v: Boolean) {
         dynamicColor = v
         prefs?.edit()?.putBoolean("dynamic_color", v)?.apply()
